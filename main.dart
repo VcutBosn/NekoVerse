@@ -6,550 +6,240 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:video_player/video_player.dart';
 
-import 'menu.dart' as menuui;
-// import 'rat.dart' as ratui; // <- aktifkan saat rat.dart siap
+import 'chat.dart';
+import 'menu.dart';
+import 'rat.dart';
+import 'overlay_main.dart';
 
-void main() {
+@pragma('vm:entry-point')
+void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
+  runOverlayApp();
+}
+
+final navigatorKey = GlobalKey<NavigatorState>();
+final unreadNotifier = ValueNotifier<int>(0);
+
+class AppConfig {
+  static const String apiBase = String.fromEnvironment(
+    'API_BASE',
+    defaultValue: 'http://zyroilegalnew.r-cloud.my.id:3801',
   );
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  runApp(const NekoVerseApp());
+  static const String apiKey = '';
+  static const serverBase = apiBase;
+  static const assetLogo = 'gallery/logo.jpg';
+  static const assetPage = 'gallery/page.png';
+  static const assetVideo = 'gallery/neko.mp4';
+  static const assetChibiIdle = 'gallery/chibi1.png';
+  static const assetChibiDrag = 'gallery/chibi2.png';
+  static const fontBug = 'bug';
+  static const fontVampire = 'vampire';
+  static const timeout = Duration(seconds: 8);
+  static const apiTimeout = Duration(seconds: 8);
+  static const pollInterval = Duration(seconds: 6);
+  static const weatherInterval = Duration(minutes: 15);
+  static const prayerInterval = Duration(hours: 6);
+  static const heartbeatMaxAge = Duration(seconds: 15);
+  static const usersPath = 'api/users';
+  static const statusPath = 'api/status';
+  static const chatsPath = 'api/chats';
+  static const logsPath = 'api/logs';
+  static const storiesPath = 'api/chats/stories';
+  static const deviceLockPath = 'api/device-lock';
+  static const weatherUrl = 'https://api.open-meteo.com/v1/forecast';
+  static const prayerUrl = 'https://api.aladhan.com/v1/timingsByCity';
+  static const prefBubbleAsked = 'bubble_permission_asked';
+  static const prefBubbleEnabled = 'bubble_enabled';
+  static const prefOverlayEnabled = 'overlay_enabled';
+  static const prefOverlayPanel = 'overlay_panel_enabled';
+  static const prefOverlayDashboard = 'overlay_feature_dashboard';
+  static const prefOverlayBug = 'overlay_feature_bug';
+  static const prefOverlayChat = 'overlay_feature_chat';
+  static const prefWeatherCity = 'weather_city_index';
+  static const prefPrayerCity = 'prayer_city_index';
 }
 
-final ValueNotifier<Color> accentNotifier =
-    ValueNotifier(AccentPresets.crimson);
-
-class AccentPresets {
-  static const crimson = Color(0xFFD91E36);
-  static const violet = Color(0xFFB794F6);
-  static const cyan = Color(0xFF22D3EE);
-  static const amber = Color(0xFFFBBF24);
-
-  static const Map<String, Color> all = {
-    'CRIMSON': crimson,
-    'VIOLET': violet,
-    'CYAN': cyan,
-    'AMBER': amber,
-  };
-
-  static const Map<String, IconData> icons = {
-    'CRIMSON': Icons.bloodtype_rounded,
-    'VIOLET': Icons.auto_awesome_rounded,
-    'CYAN': Icons.water_drop_rounded,
-    'AMBER': Icons.local_fire_department_rounded,
-  };
-
-  static String labelOf(Color c) {
-    for (final entry in all.entries) {
-      if (entry.value == c) return entry.key;
-    }
-    return 'CRIMSON';
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// SECURE CREDENTIALS (layer 1 — embedded in APK)
-// ═════════════════════════════════════════════════════════════════
-class SecureCredentials {
-  static const Map<String, String> _accounts = {
-    'toya': '1122',
-  };
-
-  static bool matches(String username, String password) {
-    final expected = _accounts[username.trim().toLowerCase()];
-    return expected != null && expected == password;
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// APP SESSION — backend-only login, device binding, auto-login
-// ═════════════════════════════════════════════════════════════════
-class AppSession {
-  static const _keyToken = 'nv_session_token';
-  static const _keyDeviceId = 'nv_device_id';
-  static const _keyUsername = 'nv_session_username';
-  static const _keyRole = 'nv_session_role';
-  static const _keyExpired = 'nv_session_expired';
-  static const _keyUserId = 'nv_session_userid';
-  static const _keyEmail = 'nv_session_email';
-  static const _keyCreatedAt = 'nv_session_created_at';
-  static const _keyAvatarPath = 'nv_session_avatar_path';
-
-  static String? _token;
-  static String? _deviceId;
-  static UserProfile? _profile;
-
-  static String? get token => _token;
-  static String? get deviceId => _deviceId;
-  static UserProfile? get profile => _profile;
-  static bool get hasToken => _token != null && _token!.isNotEmpty;
-
-  static Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString(_keyToken);
-    _deviceId = prefs.getString(_keyDeviceId);
-    if (_deviceId == null || _deviceId!.isEmpty) {
-      _deviceId = _generateDeviceId();
-      await prefs.setString(_keyDeviceId, _deviceId!);
-    }
-    final u = prefs.getString(_keyUsername);
-    final r = prefs.getString(_keyRole);
-    final e = prefs.getString(_keyExpired);
-    final id = prefs.getString(_keyUserId);
-    final email = prefs.getString(_keyEmail) ?? '';
-    final avatar = prefs.getString(_keyAvatarPath) ?? '';
-    final createdAt = DateTime.tryParse(prefs.getString(_keyCreatedAt) ?? '') ??
-        DateTime.now();
-    if (u != null && r != null && e != null) {
-      _profile = UserProfile(
-        id: id ?? 'NEKO-UNKNOWN',
-        username: u,
-        avatarPath: avatar,
-        expired: e,
-        role: r,
-        email: email,
-        createdAt: createdAt,
-      );
-    }
-  }
-
-  static String _generateDeviceId() {
-    final rng = math.Random.secure();
-    final bytes = List<int>.generate(24, (_) => rng.nextInt(256));
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  static UserProfile _profileFromServer(Map data) {
-    final existing = _profile;
-    return UserProfile(
-      id: '${data['id'] ?? existing?.id ?? 'NEKO-UNKNOWN'}',
-      username: '${data['username'] ?? existing?.username ?? ''}',
-      avatarPath: existing?.avatarPath ?? '',
-      expired: '${data['expired'] ?? existing?.expired ?? ''}',
-      role: '${data['role'] ?? existing?.role ?? 'basic'}',
-      email: '${data['email'] ?? existing?.email ?? ''}',
-      createdAt:
-          DateTime.tryParse('${data['created_at'] ?? data['createdAt'] ?? ''}') ??
-              existing?.createdAt ??
-              DateTime.now(),
-    );
-  }
-
-  static Future<bool> refreshProfile() async {
-    if (!hasToken) return false;
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
-    try {
-      final uri = Uri.parse('${Cfg.backendBase}/api/profile');
-      final req = await client.getUrl(uri).timeout(const Duration(seconds: 8));
-      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-      req.headers.set('X-Device-ID', _deviceId ?? '');
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final bodyText = await utf8.decoder
-          .bind(res)
-          .join()
-          .timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return false;
-      final decoded = jsonDecode(bodyText);
-      if (decoded is! Map || decoded['ok'] != true || decoded['user'] is! Map) {
-        return false;
-      }
-      _profile =
-          _profileFromServer(Map<String, dynamic>.from(decoded['user'] as Map));
-      await _persistAll();
-      return true;
-    } catch (_) {
-      return false;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<bool> validate() async {
-    if (!hasToken) return false;
-    try {
-      final uri = Uri.parse('${Cfg.backendBase}/api/session');
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 8);
-      try {
-        final req =
-            await client.getUrl(uri).timeout(const Duration(seconds: 8));
-        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-        req.headers.set('X-Device-ID', _deviceId ?? '');
-        final res = await req.close().timeout(const Duration(seconds: 8));
-        final bodyText = await utf8.decoder
-            .bind(res)
-            .join()
-            .timeout(const Duration(seconds: 8));
-        if (res.statusCode == 200) {
-          final data = jsonDecode(bodyText) as Map?;
-          if (data != null && data['ok'] == true && data['valid'] == true) {
-            final u = data['user'];
-            if (u is Map) {
-              _profile = _profileFromServer(Map<String, dynamic>.from(u));
-              await _persistProfileCache();
-            }
-            return true;
-          }
-        }
-        await clear();
-        return false;
-      } finally {
-        client.close(force: true);
-      }
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<String?> login({
-    required String username,
-    required String password,
-  }) async {
-    final user = username.trim();
-    if (user.isEmpty || password.isEmpty) {
-      return 'Username dan password wajib diisi.';
-    }
-
-    try {
-      final uri = Uri.parse('${Cfg.backendBase}/api/login');
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 12);
-      try {
-        final req =
-            await client.postUrl(uri).timeout(const Duration(seconds: 12));
-        req.headers.contentType = ContentType.json;
-        req.headers.set(HttpHeaders.acceptHeader, 'application/json');
-        req.write(jsonEncode({
-          'username': user,
-          'password': password,
-          'device_id': _deviceId,
-        }));
-
-        final res = await req.close().timeout(const Duration(seconds: 12));
-        final bodyText = await utf8.decoder
-            .bind(res)
-            .join()
-            .timeout(const Duration(seconds: 12));
-
-        Map<String, dynamic> data;
-        try {
-          final decoded = jsonDecode(bodyText);
-          if (decoded is! Map) {
-            return 'Respons server tidak valid.';
-          }
-          data = Map<String, dynamic>.from(decoded);
-        } catch (_) {
-          return 'Respons server bukan JSON.';
-        }
-
-        if (res.statusCode == 200 && data['ok'] == true) {
-          final newToken = '${data['access_token'] ?? data['token'] ?? ''}';
-          if (newToken.isEmpty) return 'Token tidak diterima dari server.';
-
-          _token = newToken;
-          final u = data['user'];
-          if (u is Map) {
-            _profile = _profileFromServer(Map<String, dynamic>.from(u));
-          }
-
-          if (_profile == null) {
-            await clear();
-            return 'Data akun dari server tidak lengkap.';
-          }
-
-          await _persistAll();
-          return null;
-        }
-
-        switch ('${data['error'] ?? ''}') {
-          case 'device_mismatch':
-            return 'Akun sudah terikat ke perangkat lain.';
-          case 'device_already_has_account':
-            return 'Perangkat ini sudah terikat ke akun lain.';
-          case 'license_expired':
-            return 'Masa aktif akun sudah berakhir.';
-          case 'rate_limited':
-            return 'Terlalu banyak percobaan. Coba lagi nanti.';
-          case 'invalid_credentials':
-            return 'Username atau password salah.';
-          case 'device_id_required':
-            return 'ID perangkat tidak ditemukan.';
-          default:
-            return '${data['message'] ?? data['error'] ?? 'Login gagal.'}';
-        }
-      } finally {
-        client.close(force: true);
-      }
-    } on TimeoutException {
-      return 'Server tidak menjawab. Periksa koneksi dan coba lagi.';
-    } on SocketException {
-      return 'Tidak bisa terhubung ke server. Periksa koneksi internet.';
-    } catch (e) {
-      return 'Terjadi kesalahan: ${e.toString()}';
-    }
-  }
-
-  static Future<void> _persistAll() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (_token != null) await prefs.setString(_keyToken, _token!);
-    await _persistProfileCache();
-  }
-
-  static Future<void> _persistProfileCache() async {
-    final prefs = await SharedPreferences.getInstance();
-    final p = _profile;
-    if (p == null) return;
-    await prefs.setString(_keyUsername, p.username);
-    await prefs.setString(_keyRole, p.role);
-    await prefs.setString(_keyExpired, p.expired);
-    await prefs.setString(_keyUserId, p.id);
-    await prefs.setString(_keyEmail, p.email);
-    await prefs.setString(_keyAvatarPath, p.avatarPath);
-    await prefs.setString(_keyCreatedAt, p.createdAt.toIso8601String());
-  }
-
-  static Future<void> updateAvatar(String path) async {
-    if (_profile == null) return;
-    _profile = _profile!.copyWith(avatarPath: path);
-    await _persistProfileCache();
-  }
-
-  static Future<void> logout() async {
-    if (hasToken) {
-      try {
-        final uri = Uri.parse('${Cfg.backendBase}/api/logout');
-        final client =
-            HttpClient()..connectionTimeout = const Duration(seconds: 6);
-        try {
-          final req =
-              await client.postUrl(uri).timeout(const Duration(seconds: 6));
-          req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-          req.headers.set('X-Device-ID', _deviceId ?? '');
-          await req.close().timeout(const Duration(seconds: 6));
-        } finally {
-          client.close(force: true);
-        }
-      } catch (_) {}
-    }
-    await clear();
-  }
-
-  static Future<bool> deleteAccount() async {
-    if (!hasToken || _deviceId == null || _deviceId!.isEmpty) return false;
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
-    try {
-      final uri = Uri.parse('${Cfg.backendBase}/api/account');
-      final req =
-          await client.deleteUrl(uri).timeout(const Duration(seconds: 8));
-      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
-      req.headers.set('X-Device-ID', _deviceId!);
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final bodyText = await utf8.decoder
-          .bind(res)
-          .join()
-          .timeout(const Duration(seconds: 8));
-      if (res.statusCode < 200 || res.statusCode >= 300) return false;
-      final decoded = jsonDecode(bodyText);
-      return decoded is Map && decoded['ok'] == true;
-    } catch (_) {
-      return false;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<void> clear() async {
-    _token = null;
-    _profile = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyToken);
-    await prefs.remove(_keyUsername);
-    await prefs.remove(_keyRole);
-    await prefs.remove(_keyExpired);
-    await prefs.remove(_keyUserId);
-    await prefs.remove(_keyEmail);
-    await prefs.remove(_keyAvatarPath);
-    await prefs.remove(_keyCreatedAt);
-    // _keyDeviceId SENGAJA tidak dihapus → device tetap terikat.
-  }
-}
-
-class NekoVerseApp extends StatelessWidget {
-  const NekoVerseApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'NekoVerse',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF04030A),
-        fontFamily: 'bug',
-        splashFactory: InkSparkle.splashFactory,
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFB794F6),
-          secondary: Color(0xFFFF4D9D),
-          surface: Color(0xFF0A0812),
-        ),
-      ),
-      home: const SplashScreen(),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// CONFIG & PALETTE
-// ═════════════════════════════════════════════════════════════════
-
-class Cfg {
-  static const String background = 'gallery/background.png';
-  static const String neko = 'gallery/neko.png';
-  static const String logoPage = 'gallery/page.png';
-  static const String siang = 'gallery/siang.png';
-  static const String malam = 'gallery/malam.png';
-  static const String introMusic = 'sound/intro.mp3';
-  static const String bugFont = 'bug';
-  static const String vampireFont = 'vampire';
-
-  static const String backendBase =
-      'http://ridogantengbangetpanel.pterodactylxcz.my.id:3488';
-}
-
-class P {
-  static const bgDeep = Color(0xFF010104);
-  static const bg = Color(0xFF04030A);
-  static const bgMid = Color(0xFF09071A);
-  static const bgElevated = Color(0xFF0E0B20);
-  static const surface = Color(0xFF12102A);
-  static const surfaceLight = Color(0xFF1A1738);
-  static const surfaceHover = Color(0xFF232050);
-  static const border = Color(0xFF2A2548);
-  static const borderSoft = Color(0xFF1A1630);
-  static const borderBright = Color(0xFF3D3870);
-
-  static const bone = Color(0xFFE5DCC8);
-  static const boneSoft = Color(0xFFC8BFA8);
-  static const boneDeep = Color(0xFF9B9078);
-
-  static const violet = Color(0xFFB794F6);
-  static const violetDeep = Color(0xFF6D28D9);
-  static const violetSoft = Color(0xFFD4BFFF);
-  static const violetNeon = Color(0xFF9D5CFF);
-
-  static const blood = Color(0xFF8B0A1A);
-  static const bloodBright = Color(0xFFC21628);
-  static const bloodDeep = Color(0xFF4D0710);
-  static const crimson = Color(0xFFD91E36);
-  static const rose = Color(0xFFFF2D55);
-  static const rust = Color(0xFF8B3A1A);
-
-  static const sick = Color(0xFF7BA37A);
-  static const rot = Color(0xFF4A6B4A);
-  static const coral = Color(0xFFFB7185);
-
+class Palette {
+  static const bg0 = Color(0xFF05030F);
+  static const bg1 = Color(0xFF0A0620);
+  static const bg2 = Color(0xFF120A2E);
+  static const bg3 = Color(0xFF1A1038);
+  static const surface = Color(0xFF140F2E);
+  static const surfaceAlt = Color(0xFF1B1540);
+  static const surfaceSoft = Color(0xFF241C52);
+  static const border = Color(0xFF2A2158);
+  static const borderSoft = Color(0xFF1E1740);
+  static const violet = Color(0xFFA78BFA);
+  static const violetDeep = Color(0xFF7C3AED);
+  static const pink = Color(0xFFEC4899);
+  static const pinkSoft = Color(0xFFF472B6);
   static const cyan = Color(0xFF22D3EE);
   static const cyanDeep = Color(0xFF0891B2);
-  static const teal = Color(0xFF4A8B7A);
-
+  static const mint = Color(0xFF34D399);
   static const amber = Color(0xFFFBBF24);
-  static const orange = Color(0xFFB5672E);
-  static const gold = Color(0xFFC4A34A);
-
-  static const pink = Color(0xFFB85C8A);
-  static const pinkDeep = Color(0xFF7A2E52);
+  static const coral = Color(0xFFFB7185);
+  static const gold = Color(0xFFFDE047);
+  static const blue = Color(0xFF60A5FA);
+  static const orange = Color(0xFFF97316);
+  static const teal = Color(0xFF2DD4BF);
+  static const lime = Color(0xFFA3E635);
+  static const danger = Color(0xFFFF2D55);
+  static const blood = Color(0xFF8B0000);
   static const plasma = Color(0xFFFF00AA);
-
-  static const text = Color(0xFFEDE4D3);
-  static const text2 = Color(0xFFB5AB96);
-  static const text3 = Color(0xFF807568);
-  static const text4 = Color(0xFF544A40);
-  static const text5 = Color(0xFF332C26);
+  static const toxic = Color(0xFF39FF14);
+  static const text = Color(0xFFF8F6FF);
+  static const text2 = Color(0xFFB6ADD4);
+  static const text3 = Color(0xFF7A6FA6);
+  static const text4 = Color(0xFF4E466E);
 }
 
-class S {
-  static const double xs = 4;
-  static const double sm = 8;
-  static const double md = 12;
-  static const double lg = 16;
-  static const double xl = 20;
-  static const double xxl = 28;
-  static const double xxxl = 40;
+class Spc {
+  static const double xxs = 2.0;
+  static const double xs = 4.0;
+  static const double sm = 8.0;
+  static const double md = 12.0;
+  static const double lg = 16.0;
+  static const double xl = 20.0;
+  static const double xxl = 28.0;
+  static const double xxxl = 40.0;
 }
 
-class R {
-  static const double xs = 8;
-  static const double sm = 12;
-  static const double md = 16;
-  static const double lg = 20;
-  static const double xl = 26;
-  static const double xxl = 32;
-  static const double pill = 999;
+class Radii {
+  static const double xs = 6.0;
+  static const double sm = 10.0;
+  static const double md = 16.0;
+  static const double lg = 22.0;
+  static const double xl = 28.0;
+  static const double xxl = 34.0;
+  static const double pill = 999.0;
 }
 
-class T {
-  static const fast = Duration(milliseconds: 140);
+class Timings {
+  static const fast = Duration(milliseconds: 160);
   static const normal = Duration(milliseconds: 280);
-  static const medium = Duration(milliseconds: 450);
-  static const slow = Duration(milliseconds: 700);
+  static const slow = Duration(milliseconds: 520);
 }
 
-// ═════════════════════════════════════════════════════════════════
-// USER PROFILE STORE
-// ═════════════════════════════════════════════════════════════════
+enum BackendState { loading, online, backendOnly, offline }
 
-class UserProfile {
-  final String id;
-  final String username;
-  final String avatarPath;
-  final String expired;
-  final String role;
-  final String email;
-  final DateTime createdAt;
-
-  const UserProfile({
-    required this.id,
-    required this.username,
-    required this.avatarPath,
-    required this.expired,
-    required this.role,
-    required this.email,
-    required this.createdAt,
-  });
-
-  UserProfile copyWith({
-    String? id,
-    String? username,
-    String? avatarPath,
-    String? expired,
-    String? role,
-    String? email,
-    DateTime? createdAt,
-  }) {
-    return UserProfile(
-      id: id ?? this.id,
-      username: username ?? this.username,
-      avatarPath: avatarPath ?? this.avatarPath,
-      expired: expired ?? this.expired,
-      role: role ?? this.role,
-      email: email ?? this.email,
-      createdAt: createdAt ?? this.createdAt,
+class AppTheme {
+  static ThemeData build() {
+    final base = ThemeData.dark(useMaterial3: true);
+    return base.copyWith(
+      scaffoldBackgroundColor: Palette.bg0,
+      colorScheme: const ColorScheme.dark(
+        primary: Palette.violet,
+        secondary: Palette.pink,
+        surface: Palette.surface,
+        error: Palette.coral,
+      ),
+      textTheme: base.textTheme.apply(
+        fontFamily: AppConfig.fontBug,
+        bodyColor: Palette.text,
+        displayColor: Palette.text,
+      ),
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: _PremiumPageTransitions(),
+          TargetPlatform.iOS: _PremiumPageTransitions(),
+        },
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: Palette.surfaceAlt,
+        contentTextStyle: const TextStyle(
+          fontFamily: AppConfig.fontBug,
+          color: Palette.text,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.8,
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.sm),
+          side: const BorderSide(color: Palette.border),
+        ),
+      ),
     );
   }
+}
+
+class _PremiumPageTransitions extends PageTransitionsBuilder {
+  const _PremiumPageTransitions();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    return SlideTransition(
+      position: Tween<Offset>(
+        begin: const Offset(0.06, 0.04),
+        end: Offset.zero,
+      ).animate(
+        CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+      ),
+      child: FadeTransition(
+        opacity: CurvedAnimation(
+          parent: animation,
+          curve: const Interval(0.0, 0.7, curve: Curves.easeOut),
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+class AppUser {
+  final int id;
+  final String username;
+  final String password;
+  final String role;
+  final String expired;
+  final String createdAt;
+  final bool isActive;
+
+  const AppUser({
+    required this.id,
+    required this.username,
+    this.password = '',
+    required this.role,
+    required this.expired,
+    required this.createdAt,
+    required this.isActive,
+  });
+
+  factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
+        id: (j['id'] as num?)?.toInt() ?? 0,
+        username: (j['username'] as String?) ?? 'guest',
+        password: (j['password'] as String?) ?? '',
+        role: (j['role'] as String?) ?? 'basic',
+        expired: (j['expired'] as String?) ?? '-',
+        createdAt: (j['created_at'] as String?) ?? '-',
+        isActive: (j['is_active'] as bool?) ?? false,
+      );
+
+  static AppUser fallback() => const AppUser(
+        id: 0,
+        username: 'guest',
+        password: '',
+        role: 'basic',
+        expired: '-',
+        createdAt: '-',
+        isActive: false,
+      );
+
+  bool get isOwner => role.toLowerCase() == 'owner';
+  bool get isVip => role.toLowerCase() == 'vip';
+  bool get isAdmin => role.toLowerCase() == 'admin';
 
   String get initial => username.isEmpty ? '?' : username[0].toUpperCase();
 
@@ -587,264 +277,1344 @@ class UserProfile {
 
   Color get expiryColor {
     final days = daysUntilExpiry;
-    if (days == null) return P.text3;
-    if (days < 0) return P.coral;
-    if (days <= 7) return P.coral;
-    if (days <= 30) return P.amber;
-    return P.sick;
-  }
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'username': username,
-        'avatarPath': avatarPath,
-        'expired': expired,
-        'role': role,
-        'email': email,
-        'createdAt': createdAt.toIso8601String(),
-      };
-
-  static UserProfile fromJson(Map<String, dynamic> j) => UserProfile(
-        id: '${j['id'] ?? ''}',
-        username: '${j['username'] ?? 'Guest'}',
-        avatarPath: '${j['avatarPath'] ?? ''}',
-        expired: '${j['expired'] ?? ''}',
-        role: '${j['role'] ?? 'basic'}',
-        email: '${j['email'] ?? ''}',
-        createdAt: DateTime.tryParse('${j['createdAt']}') ?? DateTime.now(),
-      );
-}
-
-class ProfileStore {
-  static const _keyId = 'nv_profile_id';
-  static const _keyUsername = 'nv_profile_username';
-  static const _keyAvatar = 'nv_profile_avatar';
-  static const _keyExpired = 'nv_profile_expired';
-  static const _keyRole = 'nv_profile_role';
-  static const _keyEmail = 'nv_profile_email';
-  static const _keyCreated = 'nv_profile_created';
-
-  static final ValueNotifier<UserProfile?> notifier =
-      ValueNotifier<UserProfile?>(null);
-
-  static UserProfile? get current => notifier.value;
-
-  static String generateId() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final rng = math.Random.secure();
-    final buffer = StringBuffer('NEKO-');
-    for (int i = 0; i < 10; i++) {
-      if (i == 5) buffer.write('-');
-      buffer.write(chars[rng.nextInt(chars.length)]);
-    }
-    return buffer.toString();
-  }
-
-  static Future<UserProfile> loadOrCreate() async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = prefs.getString(_keyId);
-    if (existing != null && existing.isNotEmpty) {
-      final profile = UserProfile(
-        id: existing,
-        username: prefs.getString(_keyUsername) ?? 'GUEST USER',
-        avatarPath: prefs.getString(_keyAvatar) ?? '',
-        expired: prefs.getString(_keyExpired) ?? _defaultExpiredString(),
-        role: prefs.getString(_keyRole) ?? 'basic',
-        email: prefs.getString(_keyEmail) ?? '',
-        createdAt: DateTime.tryParse(prefs.getString(_keyCreated) ?? '') ??
-            DateTime.now(),
-      );
-      notifier.value = profile;
-      return profile;
-    }
-    final created = UserProfile(
-      id: generateId(),
-      username: 'GUEST USER',
-      avatarPath: '',
-      expired: _defaultExpiredString(),
-      role: 'basic',
-      email: '',
-      createdAt: DateTime.now(),
-    );
-    await _persist(created);
-    notifier.value = created;
-    return created;
-  }
-
-  static String _defaultExpiredString() {
-    final now = DateTime.now();
-    final target = DateTime(now.year + 1, now.month, now.day);
-    return '${target.year}-${target.month.toString().padLeft(2, '0')}-${target.day.toString().padLeft(2, '0')}';
-  }
-
-  static Future<void> _persist(UserProfile profile) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyId, profile.id);
-    await prefs.setString(_keyUsername, profile.username);
-    await prefs.setString(_keyAvatar, profile.avatarPath);
-    await prefs.setString(_keyExpired, profile.expired);
-    await prefs.setString(_keyRole, profile.role);
-    await prefs.setString(_keyEmail, profile.email);
-    await prefs.setString(_keyCreated, profile.createdAt.toIso8601String());
-  }
-
-  static Future<void> save(UserProfile profile) async {
-    await _persist(profile);
-    notifier.value = profile;
-  }
-
-  static Future<void> clear() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyId);
-    await prefs.remove(_keyUsername);
-    await prefs.remove(_keyAvatar);
-    await prefs.remove(_keyExpired);
-    await prefs.remove(_keyRole);
-    await prefs.remove(_keyEmail);
-    await prefs.remove(_keyCreated);
-    notifier.value = null;
+    if (days == null) return Palette.text3;
+    if (days < 0) return Palette.coral;
+    if (days <= 7) return Palette.coral;
+    if (days <= 30) return Palette.amber;
+    return Palette.mint;
   }
 }
 
-class AvatarStore {
-  static Future<String> saveAvatar(XFile file) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final avatarDir = Directory('${dir.path}/avatars');
-    if (!await avatarDir.exists()) {
-      await avatarDir.create(recursive: true);
-    }
-    final ext = file.path.split('.').last;
-    final target = File(
-      '${avatarDir.path}/avatar_${DateTime.now().millisecondsSinceEpoch}.$ext',
-    );
-    await file.saveTo(target.path);
-    return target.path;
-  }
+class DashboardStats {
+  final int online;
+  final int sessions;
+  final int total;
+  final int uptimeSeconds;
+  final double cpu;
+  final double ram;
+  final double disk;
+  final String status;
 
-  static Future<void> deleteAvatar(String path) async {
-    if (path.isEmpty) return;
-    try {
-      final f = File(path);
-      if (await f.exists()) await f.delete();
-    } catch (_) {}
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// SHARED UI
-// ═════════════════════════════════════════════════════════════════
-
-class Tap extends StatefulWidget {
-  final Widget child;
-  final VoidCallback? onTap;
-  final double scale;
-  const Tap({
-    super.key,
-    required this.child,
-    required this.onTap,
-    this.scale = 0.94,
+  const DashboardStats({
+    required this.online,
+    required this.sessions,
+    required this.total,
+    required this.uptimeSeconds,
+    required this.cpu,
+    required this.ram,
+    required this.disk,
+    required this.status,
   });
 
-  @override
-  State<Tap> createState() => _TapState();
+  static DashboardStats empty() => const DashboardStats(
+        online: 0,
+        sessions: 0,
+        total: 0,
+        uptimeSeconds: 0,
+        cpu: 0,
+        ram: 0,
+        disk: 0,
+        status: 'OFFLINE',
+      );
 }
 
-class _TapState extends State<Tap> {
-  bool _p = false;
+class NetworkSnapshot {
+  final List<double> history;
+  final double incomingBytesPerSecond;
+  final double outgoingBytesPerSecond;
+
+  const NetworkSnapshot({
+    required this.history,
+    required this.incomingBytesPerSecond,
+    required this.outgoingBytesPerSecond,
+  });
+
+  static NetworkSnapshot empty() => const NetworkSnapshot(
+        history: <double>[],
+        incomingBytesPerSecond: 0,
+        outgoingBytesPerSecond: 0,
+      );
+}
+
+class ChatMsg {
+  final String sender;
+  final String message;
+  final DateTime time;
+
+  const ChatMsg({
+    required this.sender,
+    required this.message,
+    required this.time,
+  });
+
+  factory ChatMsg.fromJson(Map<String, dynamic> j) => ChatMsg(
+        sender: (j['sender'] as String?) ?? 'anonymous',
+        message: (j['message'] as String?) ?? '',
+        time: parseTime(j['timestamp']),
+      );
+
+  static DateTime parseTime(dynamic v) {
+    if (v == null) return DateTime.now();
+    if (v is num) {
+      final n = v.toInt();
+      return DateTime.fromMillisecondsSinceEpoch(
+        n < 100000000000 ? n * 1000 : n,
+      );
+    }
+    final s = v.toString().trim();
+    if (s.isEmpty) return DateTime.now();
+    return DateTime.tryParse(s) ?? DateTime.now();
+  }
+}
+
+class SyamStory {
+  final String id;
+  final String username;
+  final String text;
+  final DateTime time;
+  final String? mediaUrl;
+
+  const SyamStory({
+    required this.id,
+    required this.username,
+    required this.text,
+    required this.time,
+    this.mediaUrl,
+  });
+
+  factory SyamStory.fromJson(String id, Map<String, dynamic> j) => SyamStory(
+        id: id,
+        username: (j['username'] as String?) ??
+            (j['sender'] as String?) ??
+            'anonymous',
+        text: (j['text'] as String?) ?? (j['message'] as String?) ?? '',
+        time: ChatMsg.parseTime(j['timestamp']),
+        mediaUrl: (j['media_url'] as String?) ?? (j['mediaUrl'] as String?),
+      );
+}
+
+class NotifItem {
+  final IconData icon;
+  final String title;
+  final String body;
+  final Color color;
+
+  const NotifItem({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.color,
+  });
+}
+
+class CarouselSlide {
+  final String code;
+  final String badge;
+  final String title;
+  final String subtitle;
+  final String cta;
+  final IconData icon;
+  final Color accent;
+  final Color accent2;
+
+  const CarouselSlide({
+    required this.code,
+    required this.badge,
+    required this.title,
+    required this.subtitle,
+    required this.cta,
+    required this.icon,
+    required this.accent,
+    required this.accent2,
+  });
+}
+
+class LogEntry {
+  final IconData icon;
+  final String tag;
+  final String title;
+  final String detail;
+  final String stamp;
+  final Color color;
+
+  const LogEntry({
+    required this.icon,
+    required this.tag,
+    required this.title,
+    required this.detail,
+    required this.stamp,
+    required this.color,
+  });
+}
+
+class WeatherData {
+  final double temperature;
+  final double windSpeed;
+  final int weatherCode;
+  final bool isDay;
+  final String location;
+  final DateTime updatedAt;
+
+  const WeatherData({
+    required this.temperature,
+    required this.windSpeed,
+    required this.weatherCode,
+    required this.isDay,
+    required this.location,
+    required this.updatedAt,
+  });
+
+  static WeatherData empty() => WeatherData(
+        temperature: 0,
+        windSpeed: 0,
+        weatherCode: 0,
+        isDay: true,
+        location: '-',
+        updatedAt: DateTime.now(),
+      );
+
+  String get description {
+    switch (weatherCode) {
+      case 0:
+        return 'CERAH';
+      case 1:
+        return 'SEBAGIAN CERAH';
+      case 2:
+        return 'BERAWAN SEBAGIAN';
+      case 3:
+        return 'MENDUNG';
+      case 45:
+      case 48:
+        return 'BERKABUT';
+      case 51:
+      case 53:
+      case 55:
+        return 'GERIMIS';
+      case 56:
+      case 57:
+        return 'GERIMIS BEKU';
+      case 61:
+      case 63:
+      case 65:
+        return 'HUJAN';
+      case 66:
+      case 67:
+        return 'HUJAN BEKU';
+      case 71:
+      case 73:
+      case 75:
+        return 'SALJU';
+      case 77:
+        return 'BUTIRAN SALJU';
+      case 80:
+      case 81:
+      case 82:
+        return 'HUJAN LEBAT';
+      case 85:
+      case 86:
+        return 'SALJU LEBAT';
+      case 95:
+        return 'BADAI PETIR';
+      case 96:
+      case 99:
+        return 'BADAI PETIR HAIL';
+      default:
+        return 'TIDAK DIKETAHUI';
+    }
+  }
+
+  IconData get icon {
+    if (weatherCode == 0) {
+      return isDay ? Icons.wb_sunny_rounded : Icons.nightlight_round;
+    }
+    if (weatherCode <= 3) {
+      return isDay ? Icons.wb_cloudy_rounded : Icons.nights_stay_rounded;
+    }
+    if (weatherCode == 45 || weatherCode == 48) return Icons.foggy;
+    if (weatherCode >= 51 && weatherCode <= 57) return Icons.grain_rounded;
+    if (weatherCode >= 61 && weatherCode <= 67) {
+      return Icons.water_drop_rounded;
+    }
+    if (weatherCode >= 71 && weatherCode <= 77) return Icons.ac_unit_rounded;
+    if (weatherCode >= 80 && weatherCode <= 82) {
+      return Icons.thunderstorm_rounded;
+    }
+    if (weatherCode >= 85 && weatherCode <= 86) {
+      return Icons.ac_unit_rounded;
+    }
+    if (weatherCode >= 95) return Icons.thunderstorm_rounded;
+    return Icons.wb_cloudy_rounded;
+  }
+
+  Color get color {
+    if (weatherCode == 0) return isDay ? Palette.amber : Palette.blue;
+    if (weatherCode <= 3) return isDay ? Palette.cyan : Palette.violet;
+    if (weatherCode == 45 || weatherCode == 48) return Palette.text2;
+    if (weatherCode >= 51 && weatherCode <= 67) return Palette.blue;
+    if (weatherCode >= 71 && weatherCode <= 86) return Palette.cyan;
+    if (weatherCode >= 95) return Palette.coral;
+    return Palette.text2;
+  }
+}
+
+class PrayerTimes {
+  final String fajr;
+  final String sunrise;
+  final String dhuhr;
+  final String asr;
+  final String maghrib;
+  final String isha;
+  final String readableDate;
+  final String hijriDate;
+
+  const PrayerTimes({
+    required this.fajr,
+    required this.sunrise,
+    required this.dhuhr,
+    required this.asr,
+    required this.maghrib,
+    required this.isha,
+    required this.readableDate,
+    required this.hijriDate,
+  });
+
+  static PrayerTimes empty() => const PrayerTimes(
+        fajr: '--:--',
+        sunrise: '--:--',
+        dhuhr: '--:--',
+        asr: '--:--',
+        maghrib: '--:--',
+        isha: '--:--',
+        readableDate: '',
+        hijriDate: '',
+      );
+
+  List<PrayerEntry> get entries => <PrayerEntry>[
+        PrayerEntry('SUBUH', fajr, Icons.nights_stay_rounded, Palette.violet),
+        PrayerEntry('DZUHUR', dhuhr, Icons.wb_sunny_rounded, Palette.amber),
+        PrayerEntry('ASHAR', asr, Icons.wb_twilight_rounded, Palette.orange),
+        PrayerEntry(
+            'MAGHRIB', maghrib, Icons.wb_twilight_rounded, Palette.pink),
+        PrayerEntry('ISYA', isha, Icons.nightlight_round, Palette.cyan),
+      ];
+
+  int get nextPrayerIndex {
+    final now = DateTime.now();
+    final nowMin = now.hour * 60 + now.minute;
+    final times = <int>[
+      _toMinutes(fajr),
+      _toMinutes(dhuhr),
+      _toMinutes(asr),
+      _toMinutes(maghrib),
+      _toMinutes(isha),
+    ];
+    for (int i = 0; i < times.length; i++) {
+      if (times[i] > nowMin) return i;
+    }
+    return 0;
+  }
+
+  String get nextPrayerName => entries[nextPrayerIndex].label;
+
+  String get nextPrayerTime => entries[nextPrayerIndex].time;
+
+  Duration get timeUntilNext {
+    final now = DateTime.now();
+    final nowMin = now.hour * 60 + now.minute;
+    final parts = nextPrayerTime.split(':');
+    if (parts.length != 2) return Duration.zero;
+    final h = int.tryParse(parts[0]) ?? 0;
+    final m = int.tryParse(parts[1]) ?? 0;
+    var targetMin = h * 60 + m;
+    if (targetMin <= nowMin) targetMin += 24 * 60;
+    return Duration(minutes: targetMin - nowMin) -
+        Duration(seconds: now.second);
+  }
+
+  static int _toMinutes(String t) {
+    final parts = t.split(':');
+    if (parts.length != 2) return 0;
+    final h = int.tryParse(parts[0]) ?? 0;
+    final m = int.tryParse(parts[1]) ?? 0;
+    return h * 60 + m;
+  }
+}
+
+class PrayerEntry {
+  final String label;
+  final String time;
+  final IconData icon;
+  final Color color;
+
+  const PrayerEntry(this.label, this.time, this.icon, this.color);
+}
+
+class CityPreset {
+  final String name;
+  final String country;
+  final double lat;
+  final double lon;
+
+  const CityPreset(this.name, this.country, this.lat, this.lon);
+}
+
+const List<CityPreset> kCityPresets = <CityPreset>[
+  CityPreset('Jakarta', 'Indonesia', -6.2088, 106.8456),
+  CityPreset('Surabaya', 'Indonesia', -7.2575, 112.7521),
+  CityPreset('Bandung', 'Indonesia', -6.9175, 107.6191),
+  CityPreset('Medan', 'Indonesia', 3.5952, 98.6722),
+  CityPreset('Semarang', 'Indonesia', -6.9932, 110.4203),
+  CityPreset('Makassar', 'Indonesia', -5.1477, 119.4327),
+  CityPreset('Palembang', 'Indonesia', -2.9761, 104.7754),
+  CityPreset('Denpasar', 'Indonesia', -8.6705, 115.2126),
+  CityPreset('Yogyakarta', 'Indonesia', -7.7956, 110.3695),
+  CityPreset('Balikpapan', 'Indonesia', -1.2379, 116.8529),
+  CityPreset('Pontianak', 'Indonesia', -0.0263, 109.3425),
+  CityPreset('Manado', 'Indonesia', 1.4748, 124.8421),
+  CityPreset('Padang', 'Indonesia', -0.9471, 100.4172),
+  CityPreset('Pekanbaru', 'Indonesia', 0.5071, 101.4478),
+  CityPreset('Banjarmasin', 'Indonesia', -3.3186, 114.5944),
+  CityPreset('Malang', 'Indonesia', -7.9666, 112.6326),
+  CityPreset('Solo', 'Indonesia', -7.5755, 110.8243),
+  CityPreset('Bogor', 'Indonesia', -6.5971, 106.8060),
+  CityPreset('Depok', 'Indonesia', -6.4025, 106.7942),
+  CityPreset('Tangerang', 'Indonesia', -6.1781, 106.6300),
+];
+
+class BackendSvc {
+  static final http.Client _httpClient = http.Client();
+  static String? _sessionToken;
+
+  static String? get sessionToken => _sessionToken;
+  static void setSessionToken(String? token) =>
+      _sessionToken = token?.trim().isEmpty == true ? null : token?.trim();
+
+  Duration? _lastLatency;
+  Duration? get lastLatency => _lastLatency;
+
+  Uri _uri(String path) {
+    final clean = path.trim().replaceFirst(RegExp(r'^/+'), '');
+    return Uri.parse('${AppConfig.apiBase}/$clean');
+  }
+
+  Map<String, String> _headers({bool json = false}) {
+    return {
+      'Accept': 'application/json',
+      if (json) 'Content-Type': 'application/json',
+      if (AppConfig.apiKey.trim().isNotEmpty &&
+          AppConfig.apiKey.trim() != 'CHANGE_ME_API_KEY')
+        'X-API-Key': AppConfig.apiKey.trim(),
+      if (_sessionToken != null && _sessionToken!.isNotEmpty)
+        'Authorization': 'Bearer ${_sessionToken!}',
+    };
+  }
+
+  Future<dynamic> _get(String path) async {
+    final sw = Stopwatch()..start();
+    final res = await _httpClient
+        .get(_uri(path), headers: _headers())
+        .timeout(AppConfig.apiTimeout);
+    sw.stop();
+    _lastLatency = sw.elapsed;
+    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+    if (res.body.trim().isEmpty || res.body.trim() == 'null') return null;
+    return jsonDecode(res.body);
+  }
+
+  Future<bool> _request(String method, String path, dynamic body) async {
+    try {
+      final uri = _uri(path);
+      final headers = _headers(json: true);
+      final encoded = body == null ? null : jsonEncode(body);
+      late http.Response res;
+      switch (method) {
+        case 'POST':
+          res = await _httpClient
+              .post(uri, headers: headers, body: encoded)
+              .timeout(AppConfig.apiTimeout);
+          break;
+        case 'PUT':
+          res = await _httpClient
+              .put(uri, headers: headers, body: encoded)
+              .timeout(AppConfig.apiTimeout);
+          break;
+        case 'DELETE':
+          res = await _httpClient
+              .delete(uri, headers: headers, body: encoded)
+              .timeout(AppConfig.apiTimeout);
+          break;
+        default:
+          throw ArgumentError('Unsupported HTTP method');
+      }
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  int _number(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
+  DateTime? _date(dynamic value) {
+    if (value == null) return null;
+    if (value is num) {
+      final n = value.toInt();
+      return DateTime.fromMillisecondsSinceEpoch(
+        n < 100000000000 ? n * 1000 : n,
+      );
+    }
+    return DateTime.tryParse('$value');
+  }
+
+  Map<String, dynamic> _map(dynamic value) {
+    return value is Map
+        ? value.map((key, value) => MapEntry('$key', value))
+        : <String, dynamic>{};
+  }
+
+  bool _fresh(DateTime? seen) {
+    if (seen == null) return false;
+    return DateTime.now().difference(seen).abs() <= AppConfig.heartbeatMaxAge;
+  }
+
+  Future<Map<String, dynamic>> liveStatus() async {
+    try {
+      final raw = _map(await _get(AppConfig.statusPath));
+      final heartbeat = _map(raw['heartbeat'] ?? raw['server'] ?? raw);
+      final metrics = _map(raw['metrics']);
+      final network = _map(raw['network']);
+      final seen = _date(
+        heartbeat['timestamp'] ??
+            heartbeat['last_heartbeat'] ??
+            heartbeat['last_seen'] ??
+            heartbeat['updated_at'],
+      );
+      final onlineFlag = heartbeat['online'] == true ||
+          '${heartbeat['status']}'.toLowerCase() == 'online' ||
+          heartbeat['running'] == true;
+      final fresh = _fresh(seen);
+      final online = onlineFlag && fresh;
+      final startedAt = _date(heartbeat['started_at'] ?? raw['started_at']);
+      var uptime =
+          _number(heartbeat['uptime_seconds'] ?? raw['uptime_seconds']);
+      if (uptime <= 0 && startedAt != null && online) {
+        uptime = DateTime.now()
+            .difference(startedAt)
+            .inSeconds
+            .clamp(0, 1 << 30)
+            .toInt();
+      }
+      double ratio(dynamic value) {
+        if (value is! num) return 0;
+        final n = value.toDouble();
+        return (n > 1 ? n / 100 : n).clamp(0.0, 1.0).toDouble();
+      }
+
+      dynamic metricValue(List<String> keys) {
+        for (final key in keys) {
+          if (metrics[key] != null) return metrics[key];
+          if (raw[key] != null) return raw[key];
+        }
+        return null;
+      }
+
+      return {
+        'available': true,
+        'online': online,
+        'fresh': fresh,
+        'seen': seen,
+        'startedAt': startedAt,
+        'uptimeSeconds': online ? uptime : 0,
+        'onlineCount': online
+            ? _number(raw['online_count'] ?? heartbeat['online_count'])
+            : 0,
+        'sessions':
+            online ? _number(raw['sessions'] ?? heartbeat['sessions']) : 0,
+        'cpu': online ? ratio(metricValue(['cpu', 'cpu_usage'])) : 0.0,
+        'ram': online
+            ? ratio(metricValue(['ram', 'ram_usage', 'memory']))
+            : 0.0,
+        'disk': online ? ratio(metricValue(['disk', 'disk_usage'])) : 0.0,
+        'network': online ? network : <String, dynamic>{},
+        'raw': raw,
+      };
+    } catch (_) {
+      return {
+        'available': false,
+        'online': false,
+        'fresh': false,
+        'onlineCount': 0,
+        'sessions': 0,
+        'uptimeSeconds': 0,
+        'cpu': 0.0,
+        'ram': 0.0,
+        'disk': 0.0,
+        'network': <String, dynamic>{},
+        'raw': <String, dynamic>{},
+      };
+    }
+  }
+
+  Future<List<ChatMsg>> chats() async {
+    try {
+      final d = await _get(AppConfig.chatsPath);
+      if (d is! List) return [];
+      final list = <ChatMsg>[];
+      for (final value in d) {
+        if (value is Map) list.add(ChatMsg.fromJson(_map(value)));
+      }
+      list.sort((a, b) => b.time.compareTo(a.time));
+      return list.take(200).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  NetworkSnapshot networkSnapshotFromLive(Map<String, dynamic> live) {
+    if (live['online'] != true) return NetworkSnapshot.empty();
+    final network = _map(live['network']);
+    final raw = <double>[];
+    final rx =
+        _number(network['rx_bytes_per_sec'] ?? network['rx']).toDouble();
+    final tx =
+        _number(network['tx_bytes_per_sec'] ?? network['tx']).toDouble();
+    if (rx + tx > 0) raw.add(rx + tx);
+    if (raw.isEmpty) return NetworkSnapshot.empty();
+    final max = raw.reduce(math.max);
+    return NetworkSnapshot(
+      history: raw
+          .map((v) => max <= 0 ? 0.0 : (v / max).clamp(0.0, 1.0).toDouble())
+          .toList(),
+      incomingBytesPerSecond: rx,
+      outgoingBytesPerSecond: tx,
+    );
+  }
+
+  Future<List<LogEntry>> activityLogs() async {
+    try {
+      final d = await _get(AppConfig.logsPath);
+      if (d is! List) return [];
+      final list = <LogEntry>[];
+      for (final value in d) {
+        if (value is! Map) continue;
+        final m = _map(value);
+        final ok = m['success'] != false;
+        list.add(LogEntry(
+          icon: ok ? Icons.login_rounded : Icons.block_rounded,
+          tag: ok ? 'LOGIN' : 'DENIED',
+          title: '${m['username'] ?? 'UNKNOWN'}'.toUpperCase(),
+          detail:
+              '${m['device'] ?? 'APP'} • ${m['message'] ?? (ok ? 'Session dimulai' : 'Login ditolak')}',
+          stamp: '${m['timestamp'] ?? ''}',
+          color: ok ? Palette.mint : Palette.coral,
+        ));
+      }
+      list.sort((a, b) => b.stamp.compareTo(a.stamp));
+      return list.take(30).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<AuthResult?> login({
+    required String username,
+    required String password,
+    String device = 'APP',
+  }) async {
+    try {
+      final uri = _uri('api/auth/login');
+      final res = await _httpClient
+          .post(
+            uri,
+            headers: _headers(json: true),
+            body: jsonEncode({
+              'username': username.trim(),
+              'password': password,
+              'device': device,
+            }),
+          )
+          .timeout(AppConfig.apiTimeout);
+      if (res.statusCode != 200) return null;
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map) return null;
+      final token = '${decoded['token'] ?? ''}'.trim();
+      final rawUser = decoded['user'];
+      if (token.isEmpty || rawUser is! Map) return null;
+      final user = AppUser.fromJson(_map(rawUser));
+      _sessionToken = token;
+      return AuthResult(token: token, user: user);
+    } catch (e, st) {
+      debugPrint('LOGIN ERROR: $e');
+      debugPrint('$st');
+      return null;
+    }
+  }
+
+  Future<AppUser?> me() async {
+    if (_sessionToken == null || _sessionToken!.isEmpty) return null;
+    try {
+      final d = await _get('api/auth/me');
+      if (d is! Map) return null;
+      final rawUser = d['user'];
+      if (rawUser is! Map) return null;
+      return AppUser.fromJson(_map(rawUser));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> logout() async {
+    try {
+      if (_sessionToken != null && _sessionToken!.isNotEmpty) {
+        await _request('POST', 'api/auth/logout', const {});
+      }
+    } catch (_) {}
+    _sessionToken = null;
+  }
+
+  Future<bool> writeOverlayEvent({
+    required String username,
+    required String event,
+    Map<String, dynamic>? payload,
+  }) async {
+    return _request('POST', 'api/overlay/events', {
+      'username': username,
+      'event': event,
+      'payload': payload ?? <String, dynamic>{},
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<bool> writeLoginHistory({
+    required String username,
+    required bool success,
+    String device = 'APP',
+    String? message,
+  }) async {
+    return _request('POST', AppConfig.logsPath, {
+      'username': username,
+      'success': success,
+      'device': device,
+      'message':
+          message ?? (success ? 'Session dimulai' : 'Login ditolak'),
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<Map<String, dynamic>> readDeviceLock() async {
+    try {
+      final d = await _get(AppConfig.deviceLockPath);
+      if (d is Map) {
+        return d.map((k, v) => MapEntry('$k', v));
+      }
+      return <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  Future<bool> writeDeviceLock({
+    required bool locked,
+    String? username,
+    String? reason,
+  }) async {
+    return _request('POST', AppConfig.deviceLockPath, {
+      'locked': locked,
+      'username': username,
+      'reason': reason,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<bool> writeAccount({
+    required String username,
+    required String password,
+    required String role,
+    required String expired,
+    required bool active,
+  }) async {
+    return _request('POST', AppConfig.usersPath, {
+      'username': username,
+      'password': password,
+      'role': role,
+      'expired': expired,
+      'is_active': active,
+    });
+  }
+
+  Future<bool> sendChat(String sender, String message) async {
+    return _request('POST', AppConfig.chatsPath, {
+      'sender': sender,
+      'message': message,
+    });
+  }
+
+  Future<List<SyamStory>> fetchStories() async {
+    try {
+      final d = await _get(AppConfig.storiesPath);
+      if (d is! List) return [];
+      final items = <SyamStory>[];
+      for (final value in d) {
+        if (value is Map) {
+          final story = SyamStory.fromJson(
+            '${value['id'] ?? DateTime.now().microsecondsSinceEpoch}',
+            _map(value),
+          );
+          final age = DateTime.now().difference(story.time).inHours;
+          if (age >= 0 && age < 24) items.add(story);
+        }
+      }
+      items.sort((a, b) => b.time.compareTo(a.time));
+      return items.take(30).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> createStory({
+    required String username,
+    required String text,
+    String? mediaUrl,
+  }) async {
+    return _request('POST', AppConfig.storiesPath, {
+      'username': username,
+      'text': text,
+      'media_url': mediaUrl,
+      'timestamp': DateTime.now().toIso8601String(),
+      'expires_at': DateTime.now()
+          .add(const Duration(hours: 24))
+          .toIso8601String(),
+    });
+  }
+
+  Future<bool> deleteStory(String storyId) async {
+    if (storyId.trim().isEmpty) return false;
+    return _request(
+      'DELETE',
+      '${AppConfig.storiesPath}/${Uri.encodeComponent(storyId)}',
+      null,
+    );
+  }
+
+  Future<String?> uploadStoryMedia(File file) async {
+    try {
+      final name = file.path.split(Platform.pathSeparator).last;
+      final uri = _uri(
+        '${AppConfig.storiesPath}/upload?filename=${Uri.encodeComponent(name)}',
+      );
+      final bytes = await file.readAsBytes();
+      final res = await _httpClient
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/octet-stream'},
+            body: bytes,
+          )
+          .timeout(const Duration(seconds: 60));
+      if (res.statusCode < 200 || res.statusCode >= 300) return null;
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map && decoded['url'] is String) {
+        return decoded['url'] as String;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class WeatherSvc {
+  static final http.Client _httpClient = http.Client();
+
+  Future<WeatherData> fetch({double? lat, double? lon}) async {
+    try {
+      final latitude = lat ?? -6.2088;
+      final longitude = lon ?? 106.8456;
+      final uri = Uri.parse(
+        '${AppConfig.weatherUrl}?latitude=$latitude&longitude=$longitude&current=temperature_2m,weather_code,wind_speed_10m,is_day&timezone=auto',
+      );
+      final res = await _httpClient
+          .get(uri)
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return WeatherData.empty();
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map) return WeatherData.empty();
+      final current = decoded['current'];
+      if (current is! Map) return WeatherData.empty();
+      return WeatherData(
+        temperature: (current['temperature_2m'] as num?)?.toDouble() ?? 0,
+        windSpeed: (current['wind_speed_10m'] as num?)?.toDouble() ?? 0,
+        weatherCode: (current['weather_code'] as num?)?.toInt() ?? 0,
+        isDay: (current['is_day'] as num?)?.toInt() == 1,
+        location: '-',
+        updatedAt: DateTime.now(),
+      );
+    } catch (_) {
+      return WeatherData.empty();
+    }
+  }
+}
+
+class PrayerSvc {
+  static final http.Client _httpClient = http.Client();
+
+  Future<PrayerTimes> fetch({
+    required String city,
+    required String country,
+  }) async {
+    try {
+      final uri = Uri.parse(
+        '${AppConfig.prayerUrl}?city=${Uri.encodeComponent(city)}&country=${Uri.encodeComponent(country)}&method=20',
+      );
+      final res = await _httpClient
+          .get(uri)
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return PrayerTimes.empty();
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map) return PrayerTimes.empty();
+      final data = decoded['data'];
+      if (data is! Map) return PrayerTimes.empty();
+      final timings = data['timings'];
+      if (timings is! Map) return PrayerTimes.empty();
+      final dateMap = data['date'];
+      String readable = '';
+      String hijri = '';
+      if (dateMap is Map) {
+        readable = '${dateMap['readable'] ?? ''}';
+        final h = dateMap['hijri'];
+        if (h is Map) {
+          final day = h['day'] ?? '';
+          final monthMap = h['month'];
+          final month = monthMap is Map ? (monthMap['en'] ?? '') : '';
+          final year = h['year'] ?? '';
+          hijri = '$day $month $year';
+        }
+      }
+      return PrayerTimes(
+        fajr: _clean('${timings['Fajr']}'),
+        sunrise: _clean('${timings['Sunrise']}'),
+        dhuhr: _clean('${timings['Dhuhr']}'),
+        asr: _clean('${timings['Asr']}'),
+        maghrib: _clean('${timings['Maghrib']}'),
+        isha: _clean('${timings['Isha']}'),
+        readableDate: readable,
+        hijriDate: hijri,
+      );
+    } catch (_) {
+      return PrayerTimes.empty();
+    }
+  }
+
+  String _clean(String s) {
+    final part = s.split(' ').first;
+    return part.isEmpty ? '--:--' : part;
+  }
+}
+
+class UserSvc {
+  final BackendSvc _api = BackendSvc();
+
+  Future<List<AppUser>> fetchUsers() async {
+    try {
+      final d = await _api._get(AppConfig.usersPath);
+      if (d is! List) return [];
+      final users = <AppUser>[];
+      for (final value in d) {
+        if (value is Map) {
+          final user = AppUser.fromJson(_mapPublic(value));
+          if (user.username.isNotEmpty && user.username != 'guest') {
+            users.add(user);
+          }
+        }
+      }
+      users.sort((a, b) => a.username.toLowerCase().compareTo(
+            b.username.toLowerCase(),
+          ));
+      return users;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Map<String, dynamic> _mapPublic(dynamic value) => value is Map
+      ? value.map((k, v) => MapEntry('$k', v))
+      : <String, dynamic>{};
+}
+
+class CosmicBackground extends StatefulWidget {
+  final Widget child;
+  const CosmicBackground({super.key, required this.child});
+
+  @override
+  State<CosmicBackground> createState() => _CosmicBackgroundState();
+}
+
+class _CosmicBackgroundState extends State<CosmicBackground>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  VideoPlayerController? _video;
+  bool _videoReady = false;
+  late AnimationController _aurora;
+  late AnimationController _stars;
+  late AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _aurora = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 22),
+    )..repeat();
+    _stars = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 40),
+    )..repeat();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    )..repeat();
+    _initVideo();
+  }
+
+  Future<void> _initVideo() async {
+    try {
+      final c = VideoPlayerController.asset(AppConfig.assetVideo);
+      await c.initialize();
+      await c.setLooping(true);
+      await c.setVolume(0);
+      await c.play();
+      if (!mounted) {
+        c.dispose();
+        return;
+      }
+      setState(() {
+        _video = c;
+        _videoReady = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _videoReady = false);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final v = _video;
+    if (v == null || !_videoReady) return;
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+        v.pause();
+        break;
+      case AppLifecycleState.resumed:
+        v.play();
+        break;
+      default:
+        break;
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _aurora.dispose();
+    _stars.dispose();
+    _pulse.dispose();
+    _video?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: widget.onTap == null ? null : (_) => setState(() => _p = true),
-      onTapUp: widget.onTap == null ? null : (_) => setState(() => _p = false),
-      onTapCancel: () => setState(() => _p = false),
-      onTap: widget.onTap == null
-          ? null
-          : () {
-              HapticFeedback.lightImpact();
-              widget.onTap!();
-            },
-      child: AnimatedScale(
-        scale: _p ? widget.scale : 1.0,
-        duration: T.fast,
-        curve: Curves.easeOut,
-        child: widget.child,
-      ),
+    return Stack(
+      children: [
+        const Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Palette.bg0,
+                  Palette.bg1,
+                  Palette.bg2,
+                  Palette.bg3,
+                ],
+                stops: [0.0, 0.35, 0.7, 1.0],
+              ),
+            ),
+          ),
+        ),
+        if (_videoReady && _video != null)
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _video!.value.size.width,
+                  height: _video!.value.size.height,
+                  child: Opacity(
+                    opacity: 0.55,
+                    child: VideoPlayer(_video!),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        Positioned.fill(
+          child: RepaintBoundary(
+            child: AnimatedBuilder(
+              animation: _aurora,
+              builder: (_, __) => CustomPaint(
+                painter: _AuroraPainter(_aurora.value),
+                size: Size.infinite,
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: RepaintBoundary(
+            child: AnimatedBuilder(
+              animation: _stars,
+              builder: (_, __) => CustomPaint(
+                painter: _StarsPainter(_stars.value),
+                size: Size.infinite,
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: RepaintBoundary(
+            child: AnimatedBuilder(
+              animation: _pulse,
+              builder: (_, __) => CustomPaint(
+                painter: _NebulaPainter(_pulse.value),
+                size: Size.infinite,
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Palette.bg0.withValues(alpha: 0.35),
+                  Palette.bg0.withValues(alpha: 0.15),
+                  Palette.bg0.withValues(alpha: 0.55),
+                  Palette.bg0.withValues(alpha: 0.80),
+                ],
+                stops: const [0.0, 0.35, 0.72, 1.0],
+              ),
+            ),
+          ),
+        ),
+        widget.child,
+      ],
     );
   }
 }
 
-class Glass extends StatelessWidget {
+class _AuroraPainter extends CustomPainter {
+  final double t;
+  _AuroraPainter(this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final angle = t * math.pi * 2;
+
+    final r1 = size.width * 0.85;
+    final c1 = Offset(
+      size.width * 0.15 + math.sin(angle) * 60,
+      size.height * 0.18 + math.cos(angle * 0.7) * 50,
+    );
+    canvas.drawCircle(
+      c1,
+      r1,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Palette.violet.withValues(alpha: 0.32),
+            Palette.violet.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromCircle(center: c1, radius: r1)),
+    );
+
+    final r2 = size.width * 0.72;
+    final c2 = Offset(
+      size.width * 0.85 + math.cos(angle * 0.9) * 55,
+      size.height * 0.42 + math.sin(angle * 0.8) * 65,
+    );
+    canvas.drawCircle(
+      c2,
+      r2,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Palette.pink.withValues(alpha: 0.24),
+            Palette.pink.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromCircle(center: c2, radius: r2)),
+    );
+
+    final r3 = size.width * 0.62;
+    final c3 = Offset(
+      size.width * 0.55 + math.sin(angle * 1.1) * 70,
+      size.height * 0.88 + math.cos(angle * 1.3) * 40,
+    );
+    canvas.drawCircle(
+      c3,
+      r3,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Palette.cyan.withValues(alpha: 0.18),
+            Palette.cyan.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromCircle(center: c3, radius: r3)),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AuroraPainter old) => old.t != t;
+}
+
+class _StarsPainter extends CustomPainter {
+  final double t;
+  _StarsPainter(this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..strokeWidth = 1.2;
+    for (int i = 0; i < 80; i++) {
+      final seed = i * 137;
+      final x = ((seed * 73) % size.width.toInt()).toDouble();
+      final baseY = ((seed * 41) % size.height.toInt()).toDouble();
+      final y = (baseY - (t * size.height * 0.15)) % size.height;
+      final twinkle = (math.sin(t * math.pi * 8 + i) + 1) * 0.5;
+      final alpha = 0.15 + twinkle * 0.45;
+      paint.color = Palette.text.withValues(alpha: alpha);
+      final r = 0.6 + (seed % 3) * 0.5;
+      canvas.drawCircle(Offset(x, y), r, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StarsPainter old) => old.t != t;
+}
+
+class _NebulaPainter extends CustomPainter {
+  final double t;
+  _NebulaPainter(this.t);
+
+  static const List<double> _radii = <double>[60, 85, 70, 92, 78, 68];
+  static const List<double> _phaseOffsets = <double>[
+    0,
+    0.9,
+    1.8,
+    2.7,
+    3.6,
+    4.5
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (int i = 0; i < 6; i++) {
+      final phase = t * math.pi * 2 + _phaseOffsets[i];
+      final x = size.width * (0.15 + (i % 3) * 0.35) + math.sin(phase) * 40;
+      final y =
+          size.height * (0.2 + (i ~/ 3) * 0.5) + math.cos(phase * 0.7) * 50;
+      final r = _radii[i];
+      final color = i.isEven ? Palette.violet : Palette.pink;
+      canvas.drawCircle(
+        Offset(x, y),
+        r,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              color.withValues(alpha: 0.10),
+              color.withValues(alpha: 0.0),
+            ],
+          ).createShader(Rect.fromCircle(center: Offset(x, y), radius: r)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _NebulaPainter old) => old.t != t;
+}
+
+class GlassPanel extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
   final double radius;
   final Color? borderColor;
+  final List<BoxShadow>? shadows;
   final Color? tint;
-  final double blur;
   final bool glow;
-  final Color? glowColor;
-  final double borderWidth;
 
-  const Glass({
+  const GlassPanel({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.all(S.lg),
-    this.radius = R.lg,
+    this.padding = const EdgeInsets.all(Spc.lg),
+    this.radius = Radii.lg,
     this.borderColor,
+    this.shadows,
     this.tint,
-    this.blur = 24,
     this.glow = false,
-    this.glowColor,
-    this.borderWidth = 1.2,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            color: tint ?? P.surface.withOpacity(0.68),
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(
-              color: borderColor ?? P.border.withOpacity(0.5),
-              width: borderWidth,
-            ),
-            boxShadow: [
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: tint ?? Palette.surface.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(
+          color: borderColor ?? Palette.border,
+          width: 1.2,
+        ),
+        boxShadow: shadows ??
+            [
               if (glow)
                 BoxShadow(
-                  color: (glowColor ?? P.violet).withOpacity(0.22),
-                  blurRadius: 44,
-                  spreadRadius: -8,
+                  color: Palette.violet.withValues(alpha: 0.14),
+                  blurRadius: 28,
+                  spreadRadius: -6,
                 ),
-              const BoxShadow(
-                color: Color(0x99000000),
-                blurRadius: 24,
-                offset: Offset(0, 10),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
               ),
             ],
-          ),
-          child: child,
-        ),
       ),
+      child: child,
     );
   }
 }
 
-class Halo extends StatefulWidget {
+class HaloDot extends StatefulWidget {
   final Color color;
   final double size;
-  const Halo({super.key, this.color = P.crimson, this.size = 8});
+  final bool animate;
+
+  const HaloDot({
+    super.key,
+    this.color = Palette.mint,
+    this.size = 8,
+    this.animate = true,
+  });
 
   @override
-  State<Halo> createState() => _HaloState();
+  State<HaloDot> createState() => _HaloDotState();
 }
 
-class _HaloState extends State<Halo> with SingleTickerProviderStateMixin {
+class _HaloDotState extends State<HaloDot>
+    with SingleTickerProviderStateMixin {
   late AnimationController _c;
 
   @override
@@ -852,8 +1622,9 @@ class _HaloState extends State<Halo> with SingleTickerProviderStateMixin {
     super.initState();
     _c = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat();
+      duration: const Duration(milliseconds: 1600),
+    );
+    if (widget.animate) _c.repeat();
   }
 
   @override
@@ -868,8 +1639,12 @@ class _HaloState extends State<Halo> with SingleTickerProviderStateMixin {
       child: AnimatedBuilder(
         animation: _c,
         builder: (_, __) => CustomPaint(
-          painter: _HaloPainter(_c.value, widget.color, widget.size),
-          size: Size(widget.size * 3, widget.size * 3),
+          painter: _HaloPainter(
+            widget.animate ? _c.value : 0.5,
+            widget.color,
+            widget.size,
+          ),
+          size: Size(widget.size * 2.6, widget.size * 2.6),
         ),
       ),
     );
@@ -880,6 +1655,7 @@ class _HaloPainter extends CustomPainter {
   final double t;
   final Color color;
   final double size;
+
   _HaloPainter(this.t, this.color, this.size);
 
   @override
@@ -887,15 +1663,15 @@ class _HaloPainter extends CustomPainter {
     final c = Offset(s.width / 2, s.height / 2);
     canvas.drawCircle(
       c,
-      size * 1.7 * t,
-      Paint()..color = color.withOpacity((1 - t) * 0.55),
+      size * 1.3 * t,
+      Paint()..color = color.withValues(alpha: (1 - t) * 0.4),
     );
     canvas.drawCircle(
       c,
-      size * 0.55,
+      size * 0.6,
       Paint()
         ..color = color
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
     );
   }
 
@@ -903,22 +1679,23 @@ class _HaloPainter extends CustomPainter {
   bool shouldRepaint(covariant _HaloPainter old) => old.t != t;
 }
 
-class SignalBars extends StatefulWidget {
-  final Color color;
+class SkeletonShimmer extends StatefulWidget {
+  final double width;
   final double height;
-  final int barCount;
-  const SignalBars({
+  final double radius;
+
+  const SkeletonShimmer({
     super.key,
-    required this.color,
-    this.height = 14,
-    this.barCount = 4,
+    required this.width,
+    required this.height,
+    this.radius = Radii.md,
   });
 
   @override
-  State<SignalBars> createState() => _SignalBarsState();
+  State<SkeletonShimmer> createState() => _SkeletonShimmerState();
 }
 
-class _SignalBarsState extends State<SignalBars>
+class _SkeletonShimmerState extends State<SkeletonShimmer>
     with SingleTickerProviderStateMixin {
   late AnimationController _c;
 
@@ -927,7 +1704,7 @@ class _SignalBarsState extends State<SignalBars>
     super.initState();
     _c = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1800),
+      duration: const Duration(milliseconds: 1400),
     )..repeat();
   }
 
@@ -939,90 +1716,36 @@ class _SignalBarsState extends State<SignalBars>
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: widget.barCount * 5.5,
-      height: widget.height,
+    return RepaintBoundary(
       child: AnimatedBuilder(
         animation: _c,
-        builder: (_, __) => Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: List.generate(widget.barCount, (i) {
-            final phase = (_c.value + i * 0.18) % 1.0;
-            final h =
-                0.35 + (0.65 * (math.sin(phase * math.pi * 2) * 0.5 + 0.5));
-            return Container(
-              width: 3.2,
-              height: widget.height * h,
-              decoration: BoxDecoration(
-                color: widget.color,
-                borderRadius: BorderRadius.circular(2),
-                boxShadow: [
-                  BoxShadow(
-                    color: widget.color.withOpacity(0.8),
-                    blurRadius: 6,
-                  ),
-                ],
-              ),
-            );
-          }),
+        builder: (_, __) => Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(widget.radius),
+            gradient: LinearGradient(
+              begin: Alignment(-1 + _c.value * 2, 0),
+              end: Alignment(1 + _c.value * 2, 0),
+              colors: [
+                Palette.surface.withValues(alpha: 0.5),
+                Palette.surfaceSoft.withValues(alpha: 0.9),
+                Palette.surface.withValues(alpha: 0.5),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-class Clock extends StatefulWidget {
-  final TextStyle? style;
-  const Clock({super.key, this.style});
-
-  @override
-  State<Clock> createState() => _ClockState();
-}
-
-class _ClockState extends State<Clock> {
-  Timer? _t;
-  DateTime _n = DateTime.now();
-
-  @override
-  void initState() {
-    super.initState();
-    _t = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _n = DateTime.now());
-    });
-  }
-
-  @override
-  void dispose() {
-    _t?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final h = _n.hour.toString().padLeft(2, '0');
-    final m = _n.minute.toString().padLeft(2, '0');
-    final s = _n.second.toString().padLeft(2, '0');
-    return Text(
-      '$h:$m:$s',
-      style: widget.style ??
-          const TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 13,
-            fontWeight: FontWeight.w900,
-            color: P.bone,
-            letterSpacing: 2,
-          ),
-    );
-  }
-}
-
-class NumCounter extends StatelessWidget {
+class NumberCounter extends StatelessWidget {
   final int value;
   final TextStyle style;
   final Duration duration;
 
-  const NumCounter({
+  const NumberCounter({
     super.key,
     required this.value,
     required this.style,
@@ -1040,2073 +1763,136 @@ class NumCounter extends StatelessWidget {
   }
 }
 
-// ═════════════════════════════════════════════════════════════════
-// BACKGROUND
-// ═════════════════════════════════════════════════════════════════
-
-class Star extends StatefulWidget {
-  final Widget child;
-  const Star({super.key, required this.child});
-
-  @override
-  State<Star> createState() => _StarState();
-}
-
-class _StarState extends State<Star> with TickerProviderStateMixin {
-  late AnimationController _stars;
-  late AnimationController _nebula;
-
-  @override
-  void initState() {
-    super.initState();
-    _stars = AnimationController(
-        vsync: this, duration: const Duration(seconds: 60))
-      ..repeat();
-    _nebula = AnimationController(
-        vsync: this, duration: const Duration(seconds: 40))
-      ..repeat();
-  }
-
-  @override
-  void dispose() {
-    _stars.dispose();
-    _nebula.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [P.bgDeep, P.bg, P.bgMid, P.bg],
-              stops: [0.0, 0.35, 0.7, 1.0],
-            ),
-          ),
-        ),
-        Positioned.fill(
-          child: Image.asset(
-            Cfg.background,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-          ),
-        ),
-        Positioned.fill(
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  P.bgDeep.withOpacity(0.82),
-                  P.bgDeep.withOpacity(0.55),
-                  P.bgDeep.withOpacity(0.92),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Positioned.fill(
-          child: IgnorePointer(
-            child: RepaintBoundary(
-              child: AnimatedBuilder(
-                animation: _nebula,
-                builder: (_, __) => CustomPaint(
-                  painter: _NebulaPainter(_nebula.value),
-                ),
-              ),
-            ),
-          ),
-        ),
-        Positioned.fill(
-          child: IgnorePointer(
-            child: RepaintBoundary(
-              child: AnimatedBuilder(
-                animation: _stars,
-                builder: (_, __) => CustomPaint(
-                  painter: _StarsPainter(_stars.value),
-                ),
-              ),
-            ),
-          ),
-        ),
-        Positioned.fill(
-          child: IgnorePointer(
-            child: RepaintBoundary(
-              child: CustomPaint(painter: _VignettePainter()),
-            ),
-          ),
-        ),
-        widget.child,
-      ],
-    );
-  }
-}
-
-class _StarsPainter extends CustomPainter {
-  final double t;
-  _StarsPainter(this.t);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint();
-    for (int i = 0; i < 180; i++) {
-      final seed = i * 137;
-      final x = ((seed * 73) % size.width.toInt()).toDouble();
-      final baseY = ((seed * 41) % size.height.toInt()).toDouble();
-      final y = (baseY - (t * size.height * 0.08)) % size.height;
-      final twinkle = (math.sin(t * math.pi * 5 + i * 0.7) + 1) * 0.5;
-      final alpha = 0.05 + twinkle * 0.55;
-      final r = 0.5 + (seed % 4) * 0.4;
-      paint.color = P.bone.withOpacity(alpha);
-      canvas.drawCircle(Offset(x, y), r, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _StarsPainter old) => old.t != t;
-}
-
-class _NebulaPainter extends CustomPainter {
-  final double t;
-  _NebulaPainter(this.t);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final blobs = [
-      _NB(Offset(size.width * 0.2, size.height * 0.15), size.width * 0.85,
-          P.blood, 0.2),
-      _NB(Offset(size.width * 0.85, size.height * 0.35), size.width * 0.7,
-          P.violetDeep, 0.22),
-      _NB(Offset(size.width * 0.5, size.height * 0.85), size.width * 0.65,
-          P.rot, 0.09),
-      _NB(Offset(size.width * 0.1, size.height * 0.65), size.width * 0.55,
-          P.bloodDeep, 0.18),
-    ];
-    for (int i = 0; i < blobs.length; i++) {
-      final b = blobs[i];
-      final drift = math.sin(t * math.pi * 2 + i) * 60;
-      final c = Offset(b.center.dx + drift, b.center.dy + drift * 0.5);
-      canvas.drawCircle(
-        c,
-        b.radius,
-        Paint()
-          ..shader = RadialGradient(
-            colors: [
-              b.color.withOpacity(b.opacity),
-              b.color.withOpacity(0),
-            ],
-          ).createShader(Rect.fromCircle(center: c, radius: b.radius)),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _NebulaPainter old) => old.t != t;
-}
-
-class _NB {
-  final Offset center;
-  final double radius;
+class LiveClock extends StatefulWidget {
+  final TextStyle? style;
   final Color color;
-  final double opacity;
-  _NB(this.center, this.radius, this.color, this.opacity);
-}
 
-class _VignettePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = RadialGradient(
-          center: Alignment.center,
-          radius: 0.95,
-          colors: [
-            Colors.transparent,
-            P.bgDeep.withOpacity(0.5),
-            P.bgDeep.withOpacity(0.9),
-          ],
-          stops: const [0.45, 0.85, 1.0],
-        ).createShader(rect),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _VignettePainter old) => false;
-}
-
-// ═════════════════════════════════════════════════════════════════
-// SPLASH SCREEN — fingerprint hold
-// ═════════════════════════════════════════════════════════════════
-
-class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
-
-  @override
-  State<SplashScreen> createState() => _SplashScreenState();
-}
-
-class _SplashScreenState extends State<SplashScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _entrance;
-  late Animation<double> _fade;
-  late AnimationController _pulse;
-  late AnimationController _ring;
-  Timer? _holdTimer;
-  double _progress = 0.0;
-  bool _holding = false;
-  bool _completed = false;
-  bool _navigating = false;
-  int? _activePointer;
-
-  @override
-  void initState() {
-    super.initState();
-    _entrance = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..forward();
-    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic);
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat();
-    _ring = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 12),
-    )..repeat();
-    AppSession.init();
-  }
-
-  @override
-  void dispose() {
-    _holdTimer?.cancel();
-    _entrance.dispose();
-    _pulse.dispose();
-    _ring.dispose();
-    super.dispose();
-  }
-
-  void _startHold() {
-    if (_completed || _navigating) return;
-    setState(() => _holding = true);
-    _holdTimer?.cancel();
-    _holdTimer = Timer.periodic(const Duration(milliseconds: 30), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      setState(() {
-        _progress += 0.01;
-        if (_progress >= 1.0) {
-          _progress = 1.0;
-          _completed = true;
-          t.cancel();
-        }
-      });
-      if (_progress >= 1.0 && !_navigating) {
-        _completeHold();
-      }
-    });
-  }
-
-  void _cancelHold() {
-    if (_completed || _navigating) return;
-    _holdTimer?.cancel();
-    if (!mounted) return;
-    setState(() {
-      _holding = false;
-      _progress = 0.0;
-    });
-  }
-
-  Future<void> _completeHold() async {
-    if (_navigating) return;
-    _navigating = true;
-    HapticFeedback.heavyImpact();
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (!mounted) return;
-    await AppSession.init();
-    final hasSession = AppSession.hasToken && await AppSession.validate();
-    if (!mounted) return;
-
-    if (hasSession && AppSession.profile != null) {
-      await ProfileStore.save(AppSession.profile!);
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const MusicIntroScreen()),
-      );
-    } else {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final percent = (_progress * 100).floor();
-
-    return Scaffold(
-      backgroundColor: P.bgDeep,
-      body: Star(
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fade,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: S.xl, vertical: S.lg),
-              child: Column(
-                children: [
-                  const SizedBox(height: S.xl),
-                  _topRow(),
-                  const SizedBox(height: S.xl),
-                  _buildLogo(),
-                  const SizedBox(height: S.lg),
-                  const Text(
-                    'NekoVerse',
-                    style: TextStyle(
-                      fontFamily: Cfg.vampireFont,
-                      fontSize: 44,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone,
-                      letterSpacing: 2,
-                      height: 1.0,
-                      shadows: [
-                        Shadow(color: P.crimson, blurRadius: 24),
-                        Shadow(color: P.violet, blurRadius: 34),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'S E C U R E   T E R M I N A L',
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone.withOpacity(0.6),
-                      letterSpacing: 3.2,
-                    ),
-                  ),
-                  const SizedBox(height: S.lg),
-                  _buildInfoCard(),
-                  const Spacer(),
-                  _buildFingerprint(percent),
-                  const SizedBox(height: S.lg),
-                  _buildHoldLabel(percent),
-                  const SizedBox(height: S.xxl),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _topRow() {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: P.bgElevated.withOpacity(0.85),
-            borderRadius: BorderRadius.circular(R.pill),
-            border: Border.all(color: P.sick.withOpacity(0.5)),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Halo(color: P.sick, size: 3),
-              SizedBox(width: 6),
-              Text(
-                'SECURE',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 8.5,
-                  fontWeight: FontWeight.w900,
-                  color: P.sick,
-                  letterSpacing: 1.4,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Spacer(),
-        const Text(
-          'V2.0',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            color: P.text3,
-            letterSpacing: 2,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLogo() {
-    return SizedBox(
-      width: 140,
-      height: 140,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          AnimatedBuilder(
-            animation: _ring,
-            builder: (_, __) => Transform.rotate(
-              angle: _ring.value * math.pi * 2,
-              child: CustomPaint(
-                size: const Size(140, 140),
-                painter: _DashedRingPainter(color: P.crimson),
-              ),
-            ),
-          ),
-          Container(
-            width: 108,
-            height: 108,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const RadialGradient(
-                center: Alignment(0, -0.2),
-                radius: 1.0,
-                colors: [
-                  Color(0xFF7A0A18),
-                  Color(0xFF4D0710),
-                  Color(0xFF1A0208),
-                ],
-              ),
-              border: Border.all(color: P.crimson.withOpacity(0.6), width: 1.6),
-              boxShadow: [
-                BoxShadow(
-                  color: P.crimson.withOpacity(0.65),
-                  blurRadius: 40,
-                  spreadRadius: 3,
-                ),
-              ],
-            ),
-            child: ClipOval(
-              child: Image.asset(
-                Cfg.logoPage,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const Center(
-                  child: Text(
-                    'N',
-                    style: TextStyle(
-                      fontFamily: Cfg.vampireFont,
-                      fontSize: 62,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoCard() {
-    return Glass(
-      radius: R.lg,
-      tint: P.bgElevated.withOpacity(0.85),
-      borderColor: P.border.withOpacity(0.55),
-      padding: const EdgeInsets.all(S.md),
-      child: const Row(
-        children: [
-          Icon(Icons.shield_rounded, color: P.sick, size: 18),
-          SizedBox(width: S.sm),
-          Expanded(
-            child: Text(
-              'Autentikasi backend + device binding. Satu akun hanya untuk satu perangkat.',
-              style: TextStyle(
-                fontFamily: Cfg.bugFont,
-                fontSize: 10,
-                color: P.text2,
-                height: 1.4,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFingerprint(int percent) {
-    return Listener(
-      behavior: HitTestBehavior.opaque,
-      onPointerDown: (e) {
-        if (_activePointer != null) return;
-        _activePointer = e.pointer;
-        _startHold();
-      },
-      onPointerUp: (e) {
-        if (_activePointer != e.pointer) return;
-        _activePointer = null;
-        _cancelHold();
-      },
-      onPointerCancel: (e) {
-        if (_activePointer != e.pointer) return;
-        _activePointer = null;
-        _cancelHold();
-      },
-      child: AnimatedBuilder(
-        animation: Listenable.merge([_pulse, _ring]),
-        builder: (_, __) {
-          final pulseVal = _pulse.value;
-          final ringVal = _ring.value;
-          final activeColor = _completed
-              ? P.sick
-              : _holding
-                  ? P.crimson
-                  : P.violet;
-          return SizedBox(
-            width: 200,
-            height: 200,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                for (int i = 0; i < 3; i++)
-                  AnimatedBuilder(
-                    animation: _pulse,
-                    builder: (_, __) {
-                      final offset = (pulseVal + i * 0.33) % 1.0;
-                      final size = 120 + offset * 80;
-                      return Container(
-                        width: size,
-                        height: size,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: activeColor.withOpacity((1 - offset) * 0.5),
-                            width: 1.5,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                Transform.rotate(
-                  angle: ringVal * math.pi * 2,
-                  child: CustomPaint(
-                    size: const Size(168, 168),
-                    painter: _DashedRingPainter(color: activeColor),
-                  ),
-                ),
-                CustomPaint(
-                  size: const Size(148, 148),
-                  painter: _ProgressRingPainter(
-                    progress: _progress,
-                    color: activeColor,
-                    background: P.border.withOpacity(0.4),
-                  ),
-                ),
-                Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        activeColor.withOpacity(0.28),
-                        P.bgDeep.withOpacity(0.9),
-                      ],
-                    ),
-                    border: Border.all(
-                      color: activeColor.withOpacity(0.7),
-                      width: 1.6,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: activeColor.withOpacity(_holding ? 0.6 : 0.35),
-                        blurRadius: _holding ? 34 : 20,
-                        spreadRadius: _holding ? 2 : 0,
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    _completed
-                        ? Icons.check_rounded
-                        : Icons.fingerprint_rounded,
-                    size: 56,
-                    color: _completed
-                        ? P.sick
-                        : _holding
-                            ? P.bone
-                            : P.boneSoft,
-                  ),
-                ),
-                if (_holding || _progress > 0)
-                  Positioned(
-                    bottom: 18,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: P.bgDeep.withOpacity(0.85),
-                        borderRadius: BorderRadius.circular(R.pill),
-                        border: Border.all(
-                          color: activeColor.withOpacity(0.7),
-                        ),
-                      ),
-                      child: Text(
-                        '$percent%',
-                        style: TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                          color: activeColor,
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildHoldLabel(int percent) {
-    return Column(
-      children: [
-        Text(
-          _completed
-              ? 'AKSES DIBERIKAN'
-              : _holding
-                  ? 'MEMPROSES $percent%'
-                  : 'T A H A N   S I D I K   J A R I',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            color: _completed
-                ? P.sick
-                : _holding
-                    ? P.crimson
-                    : P.bone.withOpacity(0.8),
-            letterSpacing: 2.6,
-            height: 1.3,
-          ),
-        ),
-        const SizedBox(height: S.sm),
-        Text(
-          _completed
-              ? 'Memeriksa sesi...'
-              : 'Tahan sampai 100% untuk melanjutkan',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-            color: P.text3,
-            letterSpacing: 0.6,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _DashedRingPainter extends CustomPainter {
-  final Color color;
-  _DashedRingPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 4;
-    final paint = Paint()
-      ..color = color.withOpacity(0.55)
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    const segments = 48;
-    for (int i = 0; i < segments; i++) {
-      if (i % 3 == 0) continue;
-      final a1 = (i / segments) * math.pi * 2;
-      final a2 = a1 + (math.pi * 2 / segments) * 0.6;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius),
-        a1,
-        a2 - a1,
-        false,
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DashedRingPainter old) => old.color != color;
-}
-
-class _ProgressRingPainter extends CustomPainter {
-  final double progress;
-  final Color color;
-  final Color background;
-  _ProgressRingPainter({
-    required this.progress,
-    required this.color,
-    required this.background,
+  const LiveClock({
+    super.key,
+    this.style,
+    this.color = Palette.text,
   });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 3;
-    final rect = Rect.fromCircle(center: center, radius: radius);
-
-    canvas.drawCircle(
-      center,
-      radius,
-      Paint()
-        ..color = background
-        ..strokeWidth = 4
-        ..style = PaintingStyle.stroke,
-    );
-
-    if (progress > 0) {
-      final progressPaint = Paint()
-        ..shader = SweepGradient(
-          startAngle: -math.pi / 2,
-          endAngle: -math.pi / 2 + math.pi * 2,
-          colors: [color.withOpacity(0.4), color, color],
-          stops: const [0.0, 0.5, 1.0],
-        ).createShader(rect)
-        ..strokeWidth = 5
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round;
-
-      canvas.drawArc(
-        rect,
-        -math.pi / 2,
-        math.pi * 2 * progress,
-        false,
-        progressPaint,
-      );
-
-      final angle = -math.pi / 2 + math.pi * 2 * progress;
-      final endPoint = Offset(
-        center.dx + math.cos(angle) * radius,
-        center.dy + math.sin(angle) * radius,
-      );
-      canvas.drawCircle(
-        endPoint,
-        4,
-        Paint()
-          ..color = color
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
-      );
-      canvas.drawCircle(endPoint, 2.2, Paint()..color = Colors.white);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ProgressRingPainter old) =>
-      old.progress != progress || old.color != color;
+  State<LiveClock> createState() => _LiveClockState();
 }
 
-// ═════════════════════════════════════════════════════════════════
-// LOGIN SCREEN
-// ═════════════════════════════════════════════════════════════════
-
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
-
-  @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _entrance;
-  late Animation<double> _fade;
-  late Animation<Offset> _slide;
-  late AnimationController _ringRotation;
-  final _userCtrl = TextEditingController();
-  final _passCtrl = TextEditingController();
-  final _userFocus = FocusNode();
-  final _passFocus = FocusNode();
-  bool _obscure = true;
-  bool _loading = false;
-  String? _error;
+class _LiveClockState extends State<LiveClock> {
+  Timer? _t;
+  DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
-    _entrance = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..forward();
-    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic);
-    _slide = Tween<Offset>(
-      begin: const Offset(0, 0.08),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic));
-    _ringRotation = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 14),
-    )..repeat();
+    _t = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
   }
 
   @override
   void dispose() {
-    _entrance.dispose();
-    _ringRotation.dispose();
-    _userCtrl.dispose();
-    _passCtrl.dispose();
-    _userFocus.dispose();
-    _passFocus.dispose();
+    _t?.cancel();
     super.dispose();
-  }
-
-  Future<void> _doLogin() async {
-    if (_loading) return;
-    FocusScope.of(context).unfocus();
-    final user = _userCtrl.text.trim();
-    final pass = _passCtrl.text;
-
-    if (user.isEmpty || pass.isEmpty) {
-      setState(() => _error = 'Username dan password wajib diisi.');
-      HapticFeedback.mediumImpact();
-      return;
-    }
-
-    if (!SecureCredentials.matches(user, pass)) {
-      setState(() => _error = 'Username atau password salah.');
-      HapticFeedback.heavyImpact();
-      return;
-    }
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    final err = await AppSession.login(username: user, password: pass);
-
-    if (!mounted) return;
-
-    if (err != null) {
-      setState(() {
-        _loading = false;
-        _error = err;
-      });
-      HapticFeedback.heavyImpact();
-      return;
-    }
-
-    final profile = AppSession.profile;
-    if (profile != null) await ProfileStore.save(profile);
-
-    HapticFeedback.mediumImpact();
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const MusicIntroScreen()),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: P.bgDeep,
-      body: Star(
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fade,
-            child: SlideTransition(
-              position: _slide,
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: S.xl, vertical: S.lg),
-                child: Column(
-                  children: [
-                    const SizedBox(height: S.xl),
-                    _buildLogo(),
-                    const SizedBox(height: S.xl),
-                    _buildWelcome(),
-                    const SizedBox(height: S.xxl),
-                    _buildAuthTerminal(),
-                    const SizedBox(height: S.lg),
-                    _buildFooter(),
-                    const SizedBox(height: S.xl),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLogo() {
-    return SizedBox(
-      width: 220,
-      height: 200,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 160,
-            height: 160,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: 160,
-                  height: 160,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: P.violet.withOpacity(0.4),
-                        blurRadius: 40,
-                        spreadRadius: 4,
-                      ),
-                      BoxShadow(
-                        color: P.rose.withOpacity(0.25),
-                        blurRadius: 60,
-                        spreadRadius: 8,
-                      ),
-                    ],
-                  ),
-                ),
-                AnimatedBuilder(
-                  animation: _ringRotation,
-                  builder: (_, __) => Transform.rotate(
-                    angle: _ringRotation.value * math.pi * 2,
-                    child: CustomPaint(
-                      size: const Size(154, 154),
-                      painter: _LoginDashedRingPainter(),
-                    ),
-                  ),
-                ),
-                Container(
-                  width: 118,
-                  height: 118,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const RadialGradient(
-                      center: Alignment(0, -0.2),
-                      radius: 1.0,
-                      colors: [
-                        Color(0xFF7A0A18),
-                        Color(0xFF4D0710),
-                        Color(0xFF1A0208),
-                      ],
-                      stops: [0.0, 0.55, 1.0],
-                    ),
-                    border: Border.all(
-                      color: P.crimson.withOpacity(0.55),
-                      width: 1.6,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: P.crimson.withOpacity(0.6),
-                        blurRadius: 34,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: const Center(
-                    child: Text(
-                      'R',
-                      style: TextStyle(
-                        fontFamily: Cfg.vampireFont,
-                        fontSize: 78,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        height: 0.85,
-                        shadows: [
-                          Shadow(color: Colors.black87, blurRadius: 12),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'REVENANT',
-            style: TextStyle(
-              fontFamily: Cfg.vampireFont,
-              fontSize: 26,
-              fontWeight: FontWeight.w900,
-              color: P.bone,
-              letterSpacing: 3.5,
-              height: 1.0,
-              shadows: [
-                Shadow(color: P.rose, blurRadius: 22),
-                Shadow(color: P.violet, blurRadius: 30),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWelcome() {
-    return Column(
-      children: [
-        Text(
-          'W E L C O M E   B A C K',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            color: P.boneSoft.withOpacity(0.75),
-            letterSpacing: 3.2,
-          ),
-        ),
-        const SizedBox(height: S.sm),
-        const Text(
-          'Sign in to continue',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: P.text2,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAuthTerminal() {
-    return Glass(
-      radius: R.xl,
-      tint: P.bgElevated.withOpacity(0.9),
-      borderColor: P.violet.withOpacity(0.45),
-      padding: const EdgeInsets.all(S.lg),
-      glow: true,
-      glowColor: P.violet,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: P.violet,
-                  borderRadius: BorderRadius.circular(2),
-                  boxShadow: [BoxShadow(color: P.violet, blurRadius: 8)],
-                ),
-              ),
-              const SizedBox(width: S.sm),
-              const Text(
-                'AUTH TERMINAL',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 2.4,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: P.sick.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(R.pill),
-                  border: Border.all(color: P.sick.withOpacity(0.5)),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Halo(color: P.sick, size: 3),
-                    SizedBox(width: 5),
-                    Text(
-                      'ONLINE',
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w900,
-                        color: P.sick,
-                        letterSpacing: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: S.lg),
-          _fieldLabel('USERNAME'),
-          const SizedBox(height: 6),
-          _inputField(
-            controller: _userCtrl,
-            focus: _userFocus,
-            hint: 'Enter your username',
-            icon: Icons.person_outline_rounded,
-            nextFocus: _passFocus,
-          ),
-          const SizedBox(height: S.md),
-          _fieldLabel('PASSWORD'),
-          const SizedBox(height: 6),
-          _inputField(
-            controller: _passCtrl,
-            focus: _passFocus,
-            hint: 'Enter your password',
-            icon: Icons.lock_outline_rounded,
-            obscure: _obscure,
-            onSubmit: _doLogin,
-            trailing: IconButton(
-              onPressed: () => setState(() => _obscure = !_obscure),
-              icon: Icon(
-                _obscure
-                    ? Icons.visibility_off_rounded
-                    : Icons.visibility_rounded,
-                color: P.text3,
-                size: 18,
-              ),
-            ),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: S.md),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: S.md, vertical: S.sm),
-              decoration: BoxDecoration(
-                color: P.crimson.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(R.sm),
-                border: Border.all(color: P.crimson.withOpacity(0.5)),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 2),
-                    child: Icon(Icons.error_outline_rounded,
-                        color: P.crimson, size: 16),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SelectableText(
-                      _error!,
-                      style: const TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 10.5,
-                        color: P.coral,
-                        fontWeight: FontWeight.w700,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: S.lg),
-          _buildLoginButton(),
-        ],
-      ),
-    );
-  }
-
-  Widget _fieldLabel(String text) {
+    final h = _now.hour.toString().padLeft(2, '0');
+    final m = _now.minute.toString().padLeft(2, '0');
+    final s = _now.second.toString().padLeft(2, '0');
     return Text(
-      text,
-      style: const TextStyle(
-        fontFamily: Cfg.bugFont,
-        fontSize: 10,
-        fontWeight: FontWeight.w900,
-        color: P.boneSoft,
-        letterSpacing: 2.2,
-      ),
-    );
-  }
-
-  Widget _inputField({
-    required TextEditingController controller,
-    required FocusNode focus,
-    required String hint,
-    required IconData icon,
-    bool obscure = false,
-    Widget? trailing,
-    FocusNode? nextFocus,
-    VoidCallback? onSubmit,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: P.bgDeep.withOpacity(0.85),
-        borderRadius: BorderRadius.circular(R.md),
-        border: Border.all(color: P.border.withOpacity(0.6)),
-      ),
-      child: Row(
-        children: [
-          const SizedBox(width: S.md),
-          Icon(icon, size: 18, color: P.violet),
-          const SizedBox(width: S.sm),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focus,
-              obscureText: obscure,
-              cursorColor: P.violet,
-              onSubmitted: (_) {
-                if (onSubmit != null) {
-                  onSubmit();
-                } else if (nextFocus != null) {
-                  nextFocus.requestFocus();
-                }
-              },
-              textInputAction: onSubmit != null
-                  ? TextInputAction.done
-                  : TextInputAction.next,
-              style: const TextStyle(
-                fontFamily: Cfg.bugFont,
-                fontSize: 13,
-                color: P.bone,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-              ),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 12,
-                  color: P.text4,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                ),
-                border: InputBorder.none,
-                isCollapsed: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-            ),
+      '$h:$m:$s',
+      style: widget.style ??
+          TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            color: widget.color,
+            letterSpacing: 2.0,
           ),
-          if (trailing != null) trailing else const SizedBox(width: S.md),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLoginButton() {
-    return Tap(
-      onTap: _loading ? null : _doLogin,
-      child: Container(
-        height: 54,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(R.md),
-          gradient: const LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: [P.cyan, P.violet, P.violetDeep],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: P.violet.withOpacity(0.55),
-              blurRadius: 26,
-              spreadRadius: -4,
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(R.md),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.white.withOpacity(0.18),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              Center(
-                child: _loading
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.2,
-                          valueColor: AlwaysStoppedAnimation(Colors.white),
-                        ),
-                      )
-                    : const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            'LOGIN',
-                            style: TextStyle(
-                              fontFamily: Cfg.bugFont,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: 4,
-                              shadows: [
-                                Shadow(
-                                    color: Colors.black45, blurRadius: 8),
-                              ],
-                            ),
-                          ),
-                          SizedBox(width: S.sm),
-                          Icon(Icons.double_arrow_rounded,
-                              color: Colors.white, size: 20),
-                        ],
-                      ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFooter() {
-    return Tap(
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Hubungi admin untuk mendapatkan akses.'),
-          ),
-        );
-      },
-      child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: S.lg, vertical: S.md),
-        decoration: BoxDecoration(
-          color: P.bgElevated.withOpacity(0.7),
-          borderRadius: BorderRadius.circular(R.md),
-          border: Border.all(color: P.border.withOpacity(0.6)),
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.shopping_cart_outlined, size: 16, color: P.boneSoft),
-            SizedBox(width: S.sm),
-            Text(
-              'No Access? Buy Here',
-              style: TextStyle(
-                fontFamily: Cfg.bugFont,
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-                color: P.bone,
-                letterSpacing: 0.6,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
 
-class _LoginDashedRingPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 4;
+class TapScale extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final double scale;
 
-    final paint = Paint()
-      ..color = P.violet.withOpacity(0.65)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
-
-    const segments = 44;
-    for (int i = 0; i < segments; i++) {
-      final a1 = (i / segments) * math.pi * 2;
-      final a2 = a1 + (math.pi * 2 / segments) * 0.55;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius),
-        a1,
-        a2 - a1,
-        false,
-        paint,
-      );
-    }
-
-    final innerPaint = Paint()
-      ..color = P.rose.withOpacity(0.35)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
-
-    const innerSegments = 32;
-    final innerRadius = radius - 14;
-    for (int i = 0; i < innerSegments; i++) {
-      final a1 = (i / innerSegments) * math.pi * 2;
-      final a2 = a1 + (math.pi * 2 / innerSegments) * 0.45;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: innerRadius),
-        a1,
-        a2 - a1,
-        false,
-        innerPaint,
-      );
-    }
-  }
+  const TapScale({
+    super.key,
+    required this.child,
+    required this.onTap,
+    this.onLongPress,
+    this.scale = 0.96,
+  });
 
   @override
-  bool shouldRepaint(covariant _LoginDashedRingPainter old) => false;
+  State<TapScale> createState() => _TapScaleState();
 }
 
-// ═════════════════════════════════════════════════════════════════
-// MUSIC INTRO SCREEN
-// ═════════════════════════════════════════════════════════════════
-
-class MusicIntroScreen extends StatefulWidget {
-  const MusicIntroScreen({super.key});
-
-  @override
-  State<MusicIntroScreen> createState() => _MusicIntroScreenState();
-}
-
-class _MusicIntroScreenState extends State<MusicIntroScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _entrance;
-  late Animation<double> _fade;
-  late AnimationController _disc;
-  late AnimationController _pulse;
-  AudioPlayer? _player;
-  Timer? _progressTimer;
-  Duration _position = Duration.zero;
-  Duration _duration = const Duration(minutes: 3, seconds: 1);
-  bool _playing = false;
-  bool _audioFailed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _entrance = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..forward();
-    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic);
-    _disc = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 8),
-    )..repeat();
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2000),
-    )..repeat();
-    _initAudio();
-  }
-
-  Future<void> _initAudio() async {
-    try {
-      final player = AudioPlayer();
-      _player = player;
-      player.onDurationChanged.listen((d) {
-        if (mounted) setState(() => _duration = d);
-      });
-      player.onPositionChanged.listen((p) {
-        if (mounted) setState(() => _position = p);
-      });
-      player.onPlayerComplete.listen((_) {
-        if (mounted) _goToDashboard();
-      });
-      await player.play(AssetSource(Cfg.introMusic));
-      if (mounted) setState(() => _playing = true);
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _audioFailed = true;
-          _playing = false;
-        });
-        Timer(const Duration(seconds: 5), () {
-          if (mounted) _goToDashboard();
-        });
-      }
-    }
-    _progressTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (!mounted) return;
-      setState(() {});
-    });
-  }
-
-  Future<void> _goToDashboard() async {
-    try {
-      await _player?.stop();
-    } catch (_) {}
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-    );
-  }
-
-  Future<void> _skip() async {
-    HapticFeedback.mediumImpact();
-    await _goToDashboard();
-  }
-
-  @override
-  void dispose() {
-    _progressTimer?.cancel();
-    _player?.dispose();
-    _entrance.dispose();
-    _disc.dispose();
-    _pulse.dispose();
-    super.dispose();
-  }
-
-  double get _progressRatio {
-    if (_duration.inMilliseconds <= 0) return 0;
-    return (_position.inMilliseconds / _duration.inMilliseconds)
-        .clamp(0.0, 1.0);
-  }
-
-  String _fmt(Duration d) {
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
+class _TapScaleState extends State<TapScale> {
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: P.bgDeep,
-      body: Star(
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fade,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: S.xl, vertical: S.lg),
-              child: Column(
-                children: [
-                  _buildTopBar(),
-                  const Spacer(),
-                  _buildTag(),
-                  const SizedBox(height: S.lg),
-                  _buildTitle(),
-                  const SizedBox(height: S.xxl),
-                  _buildDisc(),
-                  const SizedBox(height: S.xxl),
-                  _buildNowPlaying(),
-                  const SizedBox(height: S.xl),
-                  _buildProgressBar(),
-                  const Spacer(),
-                  _buildSkip(),
-                  const SizedBox(height: S.lg),
-                  if (_audioFailed)
-                    Text(
-                      'Audio asset tidak ditemukan, lanjut otomatis...',
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 10,
-                        color: P.text3,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTopBar() {
-    return Row(
-      children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: [Color(0xFFFF6B00), Color(0xFFFFA000)],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFFF6B00).withOpacity(0.6),
-                blurRadius: 20,
-              ),
-            ],
-          ),
-          child: const Center(
-            child: Text(
-              'M',
-              style: TextStyle(
-                fontFamily: Cfg.vampireFont,
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: S.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'McLAREN AUDIO',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 1.4,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Row(
-                children: [
-                  const Text(
-                    'AKUN ',
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      color: P.text3,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                  Text(
-                    AppSession.profile?.username ?? 'Guest',
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      color: P.violet,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: P.bgElevated.withOpacity(0.85),
-            borderRadius: BorderRadius.circular(R.pill),
-            border: Border.all(
-              color: (_playing ? P.sick : P.text3).withOpacity(0.6),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Halo(color: _playing ? P.sick : P.text3, size: 3),
-              const SizedBox(width: 5),
-              Text(
-                _playing ? 'PLAYING' : 'READY',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 8.5,
-                  fontWeight: FontWeight.w900,
-                  color: _playing ? P.sick : P.text3,
-                  letterSpacing: 1.4,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTag() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: S.xl, vertical: S.sm),
-      decoration: BoxDecoration(
-        color: P.violet.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(R.pill),
-        border: Border.all(color: P.violet.withOpacity(0.55)),
-        boxShadow: [
-          BoxShadow(
-            color: P.violet.withOpacity(0.25),
-            blurRadius: 20,
-            spreadRadius: -4,
-          ),
-        ],
-      ),
-      child: const Text(
-        'I N T R O   S O U N D T R A C K',
-        style: TextStyle(
-          fontFamily: Cfg.bugFont,
-          fontSize: 10,
-          fontWeight: FontWeight.w900,
-          color: P.violetSoft,
-          letterSpacing: 2.4,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTitle() {
-    return const Column(
-      children: [
-        Text(
-          'INTRO McLAREN',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontFamily: Cfg.vampireFont,
-            fontSize: 34,
-            fontWeight: FontWeight.w900,
-            color: P.bone,
-            letterSpacing: 2.4,
-            height: 1.0,
-            shadows: [
-              Shadow(color: P.violet, blurRadius: 22),
-              Shadow(color: Colors.black, blurRadius: 30),
-            ],
-          ),
-        ),
-        SizedBox(height: 6),
-        Text(
-          'Purple Racing Audio System',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 10,
-            color: P.text3,
-            letterSpacing: 1.2,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDisc() {
-    return AnimatedBuilder(
-      animation: _disc,
-      builder: (_, __) {
-        return SizedBox(
-          width: 260,
-          height: 260,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              AnimatedBuilder(
-                animation: _pulse,
-                builder: (_, __) {
-                  final p = _pulse.value;
-                  return Container(
-                    width: 240 + p * 20,
-                    height: 240 + p * 20,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: P.violet.withOpacity(0.35 * (1 - p)),
-                          blurRadius: 40,
-                          spreadRadius: 6,
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-              Container(
-                width: 240,
-                height: 240,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: P.violet.withOpacity(0.5),
-                    width: 1.6,
-                  ),
-                ),
-              ),
-              Transform.rotate(
-                angle: _disc.value * math.pi * 2,
-                child: Container(
-                  width: 200,
-                  height: 200,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const SweepGradient(
-                      colors: [
-                        Color(0xFF1A0E2E),
-                        Color(0xFF3A1A50),
-                        Color(0xFF1A0E2E),
-                        Color(0xFF2A1538),
-                        Color(0xFF1A0E2E),
-                      ],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: P.violet.withOpacity(0.35),
-                        blurRadius: 30,
-                        spreadRadius: -6,
-                      ),
-                    ],
-                  ),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      for (int i = 1; i <= 6; i++)
-                        Container(
-                          width: 200 - i * 22,
-                          height: 200 - i * 22,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.05),
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                      Container(
-                        width: 84,
-                        height: 84,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Color(0xFFFF6B00),
-                              Color(0xFFFFA000),
-                              Color(0xFFE65100),
-                            ],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color:
-                                  const Color(0xFFFF6B00).withOpacity(0.55),
-                              blurRadius: 24,
-                            ),
-                          ],
-                        ),
-                        child: const Center(
-                          child: Text(
-                            'McLaren',
-                            style: TextStyle(
-                              fontFamily: Cfg.bugFont,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: P.bone,
-                ),
-              ),
-            ],
-          ),
-        );
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        widget.onTap();
       },
-    );
-  }
-
-  Widget _buildNowPlaying() {
-    return Glass(
-      radius: R.lg,
-      tint: P.bgElevated.withOpacity(0.9),
-      borderColor: P.border.withOpacity(0.55),
-      padding: const EdgeInsets.all(S.md),
-      child: Row(
-        children: [
-          _EqualizerBar(color: P.violet, animate: _playing),
-          const SizedBox(width: S.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _audioFailed
-                      ? 'AUDIO TIDAK TERSEDIA'
-                      : _playing
-                          ? 'MEMUTAR INTRO MUSIC'
-                          : 'MENUNGGU...',
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w900,
-                    color: P.bone,
-                    letterSpacing: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                const Text(
-                  'McLaren Engineer · Purple Racing',
-                  style: TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 9,
-                    color: P.text3,
-                    letterSpacing: 0.6,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            '${(_progressRatio * 100).floor()}%',
-            style: const TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              color: P.violet,
-              letterSpacing: 1.2,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildProgressBar() {
-    return Glass(
-      radius: R.lg,
-      tint: P.bgElevated.withOpacity(0.9),
-      borderColor: P.border.withOpacity(0.55),
-      padding: const EdgeInsets.all(S.md),
-      child: Column(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(R.pill),
-            child: Stack(
-              children: [
-                Container(
-                  height: 5,
-                  color: P.border.withOpacity(0.5),
-                ),
-                FractionallySizedBox(
-                  widthFactor: _progressRatio,
-                  child: Container(
-                    height: 5,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [P.violet, P.plasma],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: S.sm),
-          Row(
-            children: [
-              Text(
-                _fmt(_position),
-                style: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: P.boneSoft,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                _fmt(_duration),
-                style: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: P.boneSoft,
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSkip() {
-    return Tap(
-      onTap: _skip,
-      child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: S.xxl, vertical: S.md),
-        decoration: BoxDecoration(
-          color: P.bgElevated.withOpacity(0.9),
-          borderRadius: BorderRadius.circular(R.pill),
-          border: Border.all(color: P.violet.withOpacity(0.6)),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'SKIP INTRO',
-              style: TextStyle(
-                fontFamily: Cfg.bugFont,
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-                color: P.bone,
-                letterSpacing: 2.4,
-              ),
-            ),
-            SizedBox(width: S.sm),
-            Icon(Icons.skip_next_rounded, color: P.violet, size: 20),
-          ],
-        ),
+      onLongPress: widget.onLongPress == null
+          ? null
+          : () {
+              HapticFeedback.mediumImpact();
+              widget.onLongPress!();
+            },
+      child: AnimatedScale(
+        scale: _pressed ? widget.scale : 1.0,
+        duration: Timings.fast,
+        curve: Curves.easeOut,
+        child: widget.child,
       ),
     );
   }
 }
 
-class _EqualizerBar extends StatefulWidget {
-  final Color color;
-  final bool animate;
-  const _EqualizerBar({required this.color, required this.animate});
+class FloatWrap extends StatefulWidget {
+  final Widget child;
+  final double amplitude;
+  final Duration period;
+  final Duration delay;
+
+  const FloatWrap({
+    super.key,
+    required this.child,
+    this.amplitude = 6,
+    this.period = const Duration(seconds: 3),
+    this.delay = Duration.zero,
+  });
 
   @override
-  State<_EqualizerBar> createState() => _EqualizerBarState();
+  State<FloatWrap> createState() => _FloatWrapState();
 }
 
-class _EqualizerBarState extends State<_EqualizerBar>
+class _FloatWrapState extends State<FloatWrap>
     with SingleTickerProviderStateMixin {
   late AnimationController _c;
 
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-    if (widget.animate) _c.repeat();
-  }
-
-  @override
-  void didUpdateWidget(covariant _EqualizerBar old) {
-    super.didUpdateWidget(old);
-    if (widget.animate && !_c.isAnimating) {
-      _c.repeat();
-    } else if (!widget.animate && _c.isAnimating) {
-      _c.stop();
+    _c = AnimationController(vsync: this, duration: widget.period);
+    if (widget.delay == Duration.zero) {
+      _c.repeat(reverse: true);
+    } else {
+      Future.delayed(widget.delay, () {
+        if (mounted) _c.repeat(reverse: true);
+      });
     }
   }
 
@@ -3118,616 +1904,108 @@ class _EqualizerBarState extends State<_EqualizerBar>
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 26,
-      height: 20,
+    return RepaintBoundary(
       child: AnimatedBuilder(
         animation: _c,
-        builder: (_, __) => Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: List.generate(4, (i) {
-            final phase = (_c.value + i * 0.25) % 1.0;
-            final h =
-                0.35 + 0.65 * (math.sin(phase * math.pi * 2) * 0.5 + 0.5);
-            return Container(
-              width: 4,
-              height: 20 * h,
-              decoration: BoxDecoration(
-                color: widget.color,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            );
-          }),
-        ),
+        builder: (_, child) {
+          final v = math.sin(_c.value * math.pi * 2) * widget.amplitude;
+          return Transform.translate(
+            offset: Offset(0, v),
+            child: child,
+          );
+        },
+        child: widget.child,
       ),
     );
   }
 }
 
-// ═════════════════════════════════════════════════════════════════
-// BUBBLE + SECTION TITLE + MARQUEE
-// ═════════════════════════════════════════════════════════════════
-
-class CircleBubble extends StatelessWidget {
-  final IconData icon;
+class LiveLineChart extends StatelessWidget {
   final Color color;
-  final String? badge;
-  final VoidCallback onTap;
-  final double size;
-  final Widget? image;
-  const CircleBubble({
+  final double height;
+  final List<double> values;
+  final bool offline;
+
+  const LiveLineChart({
     super.key,
-    required this.icon,
     required this.color,
-    required this.onTap,
-    this.badge,
-    this.size = 46,
-    this.image,
+    this.height = 100,
+    this.values = const <double>[],
+    this.offline = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Tap(
-      onTap: onTap,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  P.surfaceLight.withOpacity(0.95),
-                  P.surface.withOpacity(0.9),
-                ],
-              ),
-              border: Border.all(color: color.withOpacity(0.45), width: 1.3),
-              boxShadow: [
-                BoxShadow(
-                  color: color.withOpacity(0.22),
-                  blurRadius: 20,
-                  spreadRadius: -2,
-                ),
-                const BoxShadow(
-                  color: Color(0x80000000),
-                  blurRadius: 14,
-                  offset: Offset(0, 5),
-                ),
-              ],
-            ),
-            child: ClipOval(
-              child: image ?? Icon(icon, color: color, size: size * 0.44),
-            ),
-          ),
-          if (badge != null)
-            Positioned(
-              right: -4,
-              top: -4,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                constraints: const BoxConstraints(minWidth: 20),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [P.rose, P.crimson],
-                  ),
-                  borderRadius: BorderRadius.circular(R.pill),
-                  border: Border.all(color: P.bgDeep, width: 1.8),
-                ),
-                child: Center(
-                  child: Text(
-                    badge!,
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class SectionTitle extends StatelessWidget {
-  final String title;
-  final String? subtitle;
-  final IconData icon;
-  final Color accent;
-  final String? trailing;
-  final VoidCallback? onTrailing;
-  const SectionTitle({
-    super.key,
-    required this.title,
-    required this.icon,
-    required this.accent,
-    this.subtitle,
-    this.trailing,
-    this.onTrailing,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Container(
-          width: 3,
-          height: 32,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [accent, accent.withOpacity(0.05)],
-            ),
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: S.md),
-        Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            color: accent.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(R.sm),
-            border: Border.all(color: accent.withOpacity(0.35)),
-          ),
-          child: Icon(icon, size: 16, color: accent),
-        ),
-        const SizedBox(width: S.md),
-        Expanded(
+    if (offline) {
+      return SizedBox(
+        height: height,
+        width: double.infinity,
+        child: const Center(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              Icon(
+                Icons.signal_wifi_off_rounded,
+                color: Palette.text3,
+                size: 20,
+              ),
+              SizedBox(height: 6),
               Text(
-                title,
-                style: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 13,
+                'NO SIGNAL — BACKEND OFFLINE',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 9,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 2.4,
-                  color: P.bone,
-                  height: 1.0,
+                  color: Palette.text3,
+                  letterSpacing: 1.4,
                 ),
               ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 3),
-                Text(
-                  subtitle!,
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                    color: P.text3,
-                    height: 1.0,
-                  ),
-                ),
-              ],
             ],
           ),
         ),
-        const SizedBox(width: S.sm),
-        if (trailing != null)
-          Tap(
-            onTap: onTrailing ?? () {},
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: accent.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(R.pill),
-                border: Border.all(color: accent.withOpacity(0.35)),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    trailing!,
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.3,
-                      color: accent,
-                      height: 1.0,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(Icons.arrow_forward_rounded, size: 11, color: accent),
-                ],
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class Marquee extends StatefulWidget {
-  final List<String> items;
-  const Marquee({super.key, required this.items});
-
-  @override
-  State<Marquee> createState() => _MarqueeState();
-}
-
-class _MarqueeState extends State<Marquee>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _c;
-  late ScrollController _scroll;
-
-  @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 380),
-    )..repeat();
-    _scroll = ScrollController();
-    _c.addListener(_tick);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tick());
-  }
-
-  void _tick() {
-    if (!_scroll.hasClients) return;
-    final max = _scroll.position.maxScrollExtent;
-    if (max <= 0) return;
-    _scroll.jumpTo(_c.value * max);
-  }
-
-  @override
-  void dispose() {
-    _c.removeListener(_tick);
-    _c.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<Color>(
-      valueListenable: accentNotifier,
-      builder: (_, accent, __) => Container(
-        height: 34,
-        decoration: BoxDecoration(
-          color: P.bgElevated.withOpacity(0.85),
-          borderRadius: BorderRadius.circular(R.pill),
-          border: Border.all(color: accent.withOpacity(0.35)),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(R.pill),
-          child: ShaderMask(
-            blendMode: BlendMode.dstIn,
-            shaderCallback: (rect) => LinearGradient(
-              colors: [
-                Colors.transparent,
-                Colors.black,
-                Colors.black,
-                Colors.transparent,
-              ],
-              stops: const [0.0, 0.08, 0.92, 1.0],
-            ).createShader(rect),
-            child: ListView.builder(
-              controller: _scroll,
-              scrollDirection: Axis.horizontal,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: 100,
-              itemBuilder: (_, i) {
-                final item = widget.items[i % widget.items.length];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: S.md, vertical: S.sm),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 5,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: accent,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        item,
-                        style: const TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          color: P.boneSoft,
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                      const SizedBox(width: 24),
-                      Container(
-                        width: 3,
-                        height: 3,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: P.boneDeep.withOpacity(0.4),
-                        ),
-                      ),
-                      const SizedBox(width: 24),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
+      );
+    }
+    final data = values.isEmpty
+        ? List<double>.filled(40, 0)
+        : values.length < 40
+            ? [...List<double>.filled(40 - values.length, 0), ...values]
+            : values;
+    return RepaintBoundary(
+      child: SizedBox(
+        height: height,
+        width: double.infinity,
+        child: CustomPaint(
+          painter: _LineChartPainter(data, color),
+          size: Size.infinite,
         ),
       ),
     );
   }
 }
 
-// ═════════════════════════════════════════════════════════════════
-// PULSE STRIP
-// ═════════════════════════════════════════════════════════════════
-
-class PulseTelemetry {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final List<double> history;
-  final String value;
-  final String unit;
-  const PulseTelemetry({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.history,
-    required this.value,
-    required this.unit,
-  });
-}
-
-class PulseStrip extends StatefulWidget {
-  const PulseStrip({super.key});
-
-  @override
-  State<PulseStrip> createState() => _PulseStripState();
-}
-
-class _PulseStripState extends State<PulseStrip>
-    with TickerProviderStateMixin {
-  late AnimationController _shift;
-  final List<double> _cpuHist = List.generate(24, (_) => 0.3);
-  final List<double> _ramHist = List.generate(24, (_) => 0.5);
-  final List<double> _netHist = List.generate(24, (_) => 0.2);
-  Timer? _tick;
-  final math.Random _rng = math.Random();
-  int _cpu = 24;
-  int _ram = 62;
-  int _net = 38;
-
-  @override
-  void initState() {
-    super.initState();
-    _shift = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 4),
-    )..repeat();
-    _tick = Timer.periodic(const Duration(milliseconds: 1400), (_) {
-      if (!mounted) return;
-      setState(() {
-        _cpu = (_cpu + _rng.nextInt(21) - 10).clamp(8, 92);
-        _ram = (_ram + _rng.nextInt(13) - 6).clamp(30, 92);
-        _net = (_net + _rng.nextInt(31) - 15).clamp(5, 98);
-        _cpuHist.removeAt(0);
-        _cpuHist.add(_cpu / 100.0);
-        _ramHist.removeAt(0);
-        _ramHist.add(_ram / 100.0);
-        _netHist.removeAt(0);
-        _netHist.add(_net / 100.0);
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _tick?.cancel();
-    _shift.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final telemetries = [
-      PulseTelemetry(
-        label: 'CPU',
-        icon: Icons.memory_rounded,
-        color: P.crimson,
-        history: _cpuHist,
-        value: '$_cpu',
-        unit: '%',
-      ),
-      PulseTelemetry(
-        label: 'RAM',
-        icon: Icons.storage_rounded,
-        color: P.violet,
-        history: _ramHist,
-        value: '$_ram',
-        unit: '%',
-      ),
-      PulseTelemetry(
-        label: 'NET',
-        icon: Icons.bolt_rounded,
-        color: P.cyan,
-        history: _netHist,
-        value: '$_net',
-        unit: 'Mb',
-      ),
-    ];
-
-    return Glass(
-      radius: R.lg,
-      tint: P.bgElevated.withOpacity(0.9),
-      borderColor: P.border.withOpacity(0.5),
-      padding: const EdgeInsets.all(S.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: P.sick,
-                ),
-              ),
-              const SizedBox(width: 6),
-              const Text(
-                'LIVE PULSE',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 1.8,
-                  height: 1.0,
-                ),
-              ),
-              const Spacer(),
-              AnimatedBuilder(
-                animation: _shift,
-                builder: (_, __) {
-                  final phase = (_shift.value * math.pi * 2);
-                  return Row(
-                    children: List.generate(3, (i) {
-                      final p = (phase + i * 1.2) % (math.pi * 2);
-                      final opacity =
-                          0.3 + 0.7 * (math.sin(p) * 0.5 + 0.5);
-                      return Padding(
-                        padding: const EdgeInsets.only(left: 3),
-                        child: Container(
-                          width: 4,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: P.crimson.withOpacity(opacity),
-                          ),
-                        ),
-                      );
-                    }),
-                  );
-                },
-              ),
-              const SizedBox(width: 6),
-              const Text(
-                'REALTIME',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 8,
-                  fontWeight: FontWeight.w900,
-                  color: P.crimson,
-                  letterSpacing: 1.2,
-                  height: 1.0,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: S.md),
-          Row(
-            children:
-                telemetries.map((t) => Expanded(child: _cell(t))).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _cell(PulseTelemetry t) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(t.icon, size: 11, color: t.color),
-              const SizedBox(width: 4),
-              Text(
-                t.label,
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 8,
-                  fontWeight: FontWeight.w900,
-                  color: t.color,
-                  letterSpacing: 1.2,
-                  height: 1.0,
-                ),
-              ),
-              const Spacer(),
-              RichText(
-                text: TextSpan(
-                  children: [
-                    TextSpan(
-                      text: t.value,
-                      style: const TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                        color: P.bone,
-                        letterSpacing: 0.3,
-                        height: 1.0,
-                      ),
-                    ),
-                    TextSpan(
-                      text: t.unit,
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 8,
-                        fontWeight: FontWeight.w900,
-                        color: t.color.withOpacity(0.8),
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          RepaintBoundary(
-            child: SizedBox(
-              height: 26,
-              child: CustomPaint(
-                painter: _PulseLinePainter(t.history, t.color),
-                size: const Size(double.infinity, 26),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PulseLinePainter extends CustomPainter {
+class _LineChartPainter extends CustomPainter {
   final List<double> data;
   final Color color;
-  _PulseLinePainter(this.data, this.color);
+
+  _LineChartPainter(this.data, this.color);
 
   @override
   void paint(Canvas canvas, Size size) {
     if (data.length < 2) return;
-    final step = size.width / (data.length - 1);
+    final stepX = size.width / (data.length - 1);
+
+    final gridPaint = Paint()
+      ..color = Palette.border.withValues(alpha: 0.5)
+      ..strokeWidth = 0.8;
+    for (int i = 1; i < 4; i++) {
+      final y = (size.height / 4) * i;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
     final path = Path();
     for (int i = 0; i < data.length; i++) {
-      final x = i * step;
-      final y = size.height - data[i] * (size.height - 4) - 2;
+      final x = i * stepX;
+      final y = size.height - data[i] * (size.height - 12) - 6;
       if (i == 0) {
         path.moveTo(x, y);
       } else {
@@ -3745,1445 +2023,203 @@ class _PulseLinePainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [color.withOpacity(0.35), color.withOpacity(0.0)],
+          colors: [
+            color.withValues(alpha: 0.35),
+            color.withValues(alpha: 0.0),
+          ],
         ).createShader(Offset.zero & size),
     );
+
     canvas.drawPath(
       path,
       Paint()
         ..color = color
-        ..strokeWidth = 1.6
+        ..strokeWidth = 2
         ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke,
     );
 
-    final lastX = (data.length - 1) * step;
-    final lastY = size.height - data.last * (size.height - 4) - 2;
+    final lastX = (data.length - 1) * stepX;
+    final lastY = size.height - data.last * (size.height - 12) - 6;
     canvas.drawCircle(
       Offset(lastX, lastY),
-      1.4,
-      Paint()..color = Colors.white,
+      4,
+      Paint()..color = color,
     );
   }
 
   @override
-  bool shouldRepaint(covariant _PulseLinePainter old) => true;
+  bool shouldRepaint(covariant _LineChartPainter old) => true;
 }
 
-// ═════════════════════════════════════════════════════════════════
-// STORY (FIXED) — no "+", avatar photo, media support
-// ═════════════════════════════════════════════════════════════════
+class DonutChart extends StatelessWidget {
+  final List<double> values;
+  final List<Color> colors;
+  final double size;
 
-enum StoryMediaType { text, image, video }
-
-class StoryData {
-  final String username;
-  final String avatarText;
-  final String avatarPath; // local avatar path (kalau ada)
-  final Color c1;
-  final Color c2;
-  final bool isOwn;
-  final bool isLive;
-  final int count;
-  final String? id;
-  final String? storyText;
-  final String? mediaUrl;
-  final StoryMediaType mediaType;
-  final DateTime? createdAt;
-
-  const StoryData({
-    required this.username,
-    required this.avatarText,
-    this.avatarPath = '',
-    required this.c1,
-    required this.c2,
-    this.isOwn = false,
-    this.isLive = false,
-    this.count = 1,
-    this.id,
-    this.storyText,
-    this.mediaUrl,
-    this.mediaType = StoryMediaType.text,
-    this.createdAt,
-  });
-}
-
-class StoryCircle extends StatefulWidget {
-  final StoryData data;
-  final VoidCallback onTap;
-  final bool isPosting;
-  const StoryCircle({
+  const DonutChart({
     super.key,
-    required this.data,
-    required this.onTap,
-    this.isPosting = false,
+    required this.values,
+    required this.colors,
+    this.size = 110,
   });
-
-  @override
-  State<StoryCircle> createState() => _StoryCircleState();
-}
-
-class _StoryCircleState extends State<StoryCircle>
-    with TickerProviderStateMixin {
-  late AnimationController _rot;
-  late AnimationController _pulse;
-
-  @override
-  void initState() {
-    super.initState();
-    _rot = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 12),
-    )..repeat();
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2600),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _rot.dispose();
-    _pulse.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    final d = widget.data;
-    final hasAvatar = d.avatarPath.isNotEmpty;
-
-    return Tap(
-      onTap: widget.onTap,
-      scale: 0.88,
-      child: SizedBox(
-        width: 86,
-        child: Column(
-          children: [
-            SizedBox(
-              width: 80,
-              height: 80,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  if (d.isLive && !d.isOwn)
-                    AnimatedBuilder(
-                      animation: _pulse,
-                      builder: (_, __) => Container(
-                        width: 80 + _pulse.value * 12,
-                        height: 80 + _pulse.value * 12,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: P.crimson
-                                .withOpacity(0.6 * (1 - _pulse.value)),
-                            width: 1.8,
-                          ),
-                        ),
-                      ),
-                    ),
-                  // Ring
-                  if (widget.isPosting)
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: P.violet.withOpacity(0.75),
-                          width: 2.4,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: P.violet.withOpacity(0.5),
-                            blurRadius: 16,
-                            spreadRadius: -2,
-                          ),
-                        ],
-                      ),
-                    )
-                  else if (d.isOwn)
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: P.boneDeep.withOpacity(0.4),
-                          width: 1.6,
-                        ),
-                      ),
-                    )
-                  else
-                    AnimatedBuilder(
-                      animation: _rot,
-                      builder: (_, __) => Transform.rotate(
-                        angle: _rot.value * math.pi * 2,
-                        child: CustomPaint(
-                          size: const Size(80, 80),
-                          painter: _StoryRingPainter(d.c1, d.c2, d.isLive),
-                        ),
-                      ),
-                    ),
-                  // Avatar
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: P.bgDeep,
-                      border: Border.all(color: P.bgDeep, width: 2),
-                    ),
-                    child: ClipOval(
-                      child: hasAvatar
-                          ? Image.file(
-                              File(d.avatarPath),
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => _initialAvatar(d),
-                            )
-                          : _initialAvatar(d),
-                    ),
-                  ),
-                  // NO "+" ADD BADGE — dihapus
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              widget.isPosting ? 'POSTING' : (d.isOwn ? 'KAMU' : d.username.toUpperCase()),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: Cfg.bugFont,
-                fontSize: 8.5,
-                fontWeight: FontWeight.w900,
-                color: widget.isPosting
-                    ? P.violet
-                    : (d.isOwn ? P.violetSoft : P.text2),
-                letterSpacing: 1.0,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _initialAvatar(StoryData d) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [d.c1, d.c2],
-        ),
-      ),
-      child: Center(
-        child: Text(
-          d.avatarText,
-          style: const TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 24,
-            fontWeight: FontWeight.w900,
-            color: P.bone,
-          ),
+    return RepaintBoundary(
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 1200),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, __) => CustomPaint(
+          painter: _DonutPainter(values, colors, v),
+          size: Size(size, size),
         ),
       ),
     );
   }
 }
 
-class _StoryRingPainter extends CustomPainter {
-  final Color c1;
-  final Color c2;
-  final bool isLive;
-  _StoryRingPainter(this.c1, this.c2, this.isLive);
+class _DonutPainter extends CustomPainter {
+  final List<double> values;
+  final List<Color> colors;
+  final double t;
+
+  _DonutPainter(this.values, this.colors, this.t);
 
   @override
   void paint(Canvas canvas, Size size) {
+    final total = values.fold<double>(0, (a, b) => a + b);
+    if (total == 0) return;
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 2;
-    final gradient = SweepGradient(
-      colors: isLive
-          ? [P.crimson, P.bloodBright, P.crimson, P.blood]
-          : [c1, c2, c1],
-    );
-    canvas.drawCircle(
-      center,
-      radius,
-      Paint()
-        ..shader = gradient
-            .createShader(Rect.fromCircle(center: center, radius: radius))
+    final radius = (size.width - 14) / 2;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    double start = -math.pi / 2;
+    for (int i = 0; i < values.length; i++) {
+      final sweep = (values[i] / total) * math.pi * 2 * t;
+      final paint = Paint()
+        ..color = colors[i % colors.length]
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.6,
-    );
+        ..strokeWidth = 14
+        ..strokeCap = StrokeCap.butt;
+      canvas.drawArc(rect, start, sweep - 0.02, false, paint);
+      start += sweep;
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _StoryRingPainter old) => true;
+  bool shouldRepaint(covariant _DonutPainter old) => old.t != t;
 }
 
-// Story Viewer — handle text / image / video
-class StoryVideoContent extends StatefulWidget {
-  final String url;
-  final bool isLocal;
+class AvatarCircle extends StatelessWidget {
+  final AppUser user;
+  final double size;
+  final bool showRing;
 
-  const StoryVideoContent({
+  const AvatarCircle({
     super.key,
-    required this.url,
-    required this.isLocal,
+    required this.user,
+    this.size = 48,
+    this.showRing = true,
   });
 
   @override
-  State<StoryVideoContent> createState() => _StoryVideoContentState();
-}
-
-class _StoryVideoContentState extends State<StoryVideoContent> {
-  VideoPlayerController? _controller;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _initialize();
-  }
-
-  @override
-  void didUpdateWidget(covariant StoryVideoContent oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.url != widget.url ||
-        oldWidget.isLocal != widget.isLocal) {
-      _disposeController();
-      _initialize();
-    }
-  }
-
-  Future<void> _initialize() async {
-    try {
-      final controller = widget.isLocal
-          ? VideoPlayerController.file(File(widget.url))
-          : VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      _controller = controller;
-      await controller.initialize();
-      await controller.setLooping(true);
-      await controller.play();
-      if (mounted) setState(() {});
-    } catch (_) {
-      if (mounted) {
-        setState(() => _error = 'Video tidak dapat diputar.');
-      }
-    }
-  }
-
-  Future<void> _disposeController() async {
-    final controller = _controller;
-    _controller = null;
-    if (controller != null) await controller.dispose();
-  }
-
-  @override
-  void dispose() {
-    final controller = _controller;
-    _controller = null;
-    if (controller != null) controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final controller = _controller;
-    if (_error != null) {
-      return Center(
+    final base = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Radii.md),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: user.isOwner
+              ? [Palette.pink, Palette.violet]
+              : user.isVip
+                  ? [Palette.amber, Palette.coral]
+                  : [Palette.violet, Palette.cyanDeep],
+        ),
+      ),
+      child: Center(
         child: Text(
-          _error!,
-          style: const TextStyle(color: Colors.white70),
-        ),
-      );
-    }
-    if (controller == null || !controller.value.isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      );
-    }
-    return GestureDetector(
-      onTap: () {
-        if (controller.value.isPlaying) {
-          controller.pause();
-        } else {
-          controller.play();
-        }
-        setState(() {});
-      },
-      child: Center(
-        child: AspectRatio(
-          aspectRatio: controller.value.aspectRatio > 0
-              ? controller.value.aspectRatio
-              : 9 / 16,
-          child: VideoPlayer(controller),
-        ),
-      ),
-    );
-  }
-}
-
-class StoryViewerScreen extends StatefulWidget {
-  final StoryData story;
-  const StoryViewerScreen({super.key, required this.story});
-
-  @override
-  State<StoryViewerScreen> createState() => _StoryViewerScreenState();
-}
-
-class _StoryViewerScreenState extends State<StoryViewerScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _progressCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _progressCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 6),
-    )..forward();
-  }
-
-  @override
-  void dispose() {
-    _progressCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.story;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            // Content
-            Positioned.fill(
-              child: _buildContent(s),
-            ),
-            // Top bar with progress + user info
-            Positioned(
-              top: 8,
-              left: 12,
-              right: 12,
-              child: Column(
-                children: [
-                  AnimatedBuilder(
-                    animation: _progressCtrl,
-                    builder: (_, __) => ClipRRect(
-                      borderRadius: BorderRadius.circular(2),
-                      child: LinearProgressIndicator(
-                        value: _progressCtrl.value,
-                        minHeight: 3,
-                        backgroundColor: Colors.white24,
-                        valueColor:
-                            AlwaysStoppedAnimation(accentNotifier.value),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.5),
-                            width: 1.4,
-                          ),
-                        ),
-                        child: ClipOval(
-                          child: s.avatarPath.isNotEmpty
-                              ? Image.file(
-                                  File(s.avatarPath),
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Center(
-                                    child: Text(
-                                      s.avatarText,
-                                      style: const TextStyle(
-                                        fontFamily: Cfg.bugFont,
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                              : Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [s.c1, s.c2],
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      s.avatarText,
-                                      style: const TextStyle(
-                                        fontFamily: Cfg.bugFont,
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              s.username,
-                              style: const TextStyle(
-                                fontFamily: Cfg.bugFont,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                              ),
-                            ),
-                            if (s.createdAt != null)
-                              Text(
-                                _formatTime(s.createdAt!),
-                                style: const TextStyle(
-                                  fontFamily: Cfg.bugFont,
-                                  fontSize: 9,
-                                  color: Colors.white70,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close_rounded,
-                            color: Colors.white, size: 22),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildContent(StoryData s) {
-    if (s.mediaType == StoryMediaType.image &&
-        s.mediaUrl != null &&
-        s.mediaUrl!.isNotEmpty) {
-      return _buildMedia(s);
-    }
-    if (s.mediaType == StoryMediaType.video &&
-        s.mediaUrl != null &&
-        s.mediaUrl!.isNotEmpty) {
-      return _buildMedia(s);
-    }
-    return _buildText(s);
-  }
-
-  Widget _buildMedia(StoryData s) {
-    final url = s.mediaUrl!;
-    final isLocal = !url.startsWith('http');
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (s.mediaType == StoryMediaType.image)
-          isLocal
-              ? Image.file(File(url), fit: BoxFit.contain)
-              : Image.network(url, fit: BoxFit.contain)
-        else
-          StoryVideoContent(url: url, isLocal: isLocal),
-        // Caption overlay
-        if (s.storyText != null && s.storyText!.trim().isNotEmpty)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(S.xl, S.xl, S.xl, S.xxl),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withOpacity(0.85),
-                  ],
-                ),
-              ),
-              child: Text(
-                s.storyText!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  height: 1.4,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
+          user.initial,
+          style: TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: size * 0.42,
+            fontWeight: FontWeight.w900,
+            color: Colors.white,
           ),
-      ],
+        ),
+      ),
     );
-  }
 
-  Widget _buildText(StoryData s) {
+    if (!showRing) return base;
+
     return Container(
+      padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [s.c1, P.bgDeep, s.c2],
+        borderRadius: BorderRadius.circular(Radii.md + 2),
+        border: Border.all(
+          color: Palette.violet.withValues(alpha: 0.5),
+          width: 1.2,
         ),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: S.xxl),
-      child: Center(
-        child: SingleChildScrollView(
-          child: Text(
-            s.storyText ?? 'Story ini tidak memiliki teks.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              height: 1.4,
-              fontWeight: FontWeight.w700,
-              shadows: [
-                Shadow(color: Colors.black54, blurRadius: 12),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatTime(DateTime date) {
-    final local = date.toLocal();
-    final diff = DateTime.now().difference(local);
-    if (diff.inMinutes < 1) return 'Baru saja';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} menit lalu';
-    if (diff.inHours < 24) return '${diff.inHours} jam lalu';
-    return '${diff.inDays} hari lalu';
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// TOOL CAROUSEL — 2 menu saja
-// ═════════════════════════════════════════════════════════════════
-
-class ToolData {
-  final String code;
-  final String title;
-  final String subtitle;
-  final String tag;
-  final IconData icon;
-  final List<Color> colors;
-  final String statLabel;
-  final String statValue;
-  final bool danger;
-  final bool isCoding;
-  const ToolData({
-    required this.code,
-    required this.title,
-    required this.subtitle,
-    required this.tag,
-    required this.icon,
-    required this.colors,
-    required this.statLabel,
-    required this.statValue,
-    this.danger = true,
-    this.isCoding = false,
-  });
-}
-
-class ToolCarousel extends StatefulWidget {
-  final List<ToolData> tools;
-  final ValueChanged<String>? onToolTap;
-  const ToolCarousel({super.key, required this.tools, this.onToolTap});
-
-  @override
-  State<ToolCarousel> createState() => _ToolCarouselState();
-}
-
-class _ToolCarouselState extends State<ToolCarousel>
-    with TickerProviderStateMixin {
-  late PageController _ctrl;
-  late AnimationController _auto;
-  int _current = 0;
-  double _pageOffset = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = PageController(viewportFraction: 0.85);
-    _ctrl.addListener(() {
-      if (!mounted) return;
-      setState(() => _pageOffset = _ctrl.page ?? 0);
-    });
-    _auto = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 6),
-    )..addStatusListener((status) {
-        if (status == AnimationStatus.completed && mounted) {
-          final next = (_current + 1) % widget.tools.length;
-          _ctrl.animateToPage(
-            next,
-            duration: const Duration(milliseconds: 700),
-            curve: Curves.easeOutCubic,
-          );
-          _auto.forward(from: 0);
-        }
-      });
-    _auto.forward();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    _auto.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        SizedBox(
-          height: 200,
-          child: PageView.builder(
-            controller: _ctrl,
-            physics: const BouncingScrollPhysics(),
-            itemCount: widget.tools.length,
-            onPageChanged: (i) {
-              setState(() => _current = i);
-              _auto.forward(from: 0);
-            },
-            itemBuilder: (_, i) {
-              final tool = widget.tools[i];
-              final distance =
-                  (i - _pageOffset).abs().clamp(0.0, 1.0).toDouble();
-              final scale = 1.0 - distance * 0.12;
-              final opacity = 1.0 - distance * 0.3;
-              return AnimatedBuilder(
-                animation: _ctrl,
-                builder: (_, __) => Transform.scale(
-                  scale: scale,
-                  child: Opacity(
-                    opacity: opacity,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: _ToolCard(
-                        tool: tool,
-                        isActive: i == _current,
-                        onTap: () => widget.onToolTap?.call(tool.code),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: S.lg),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(widget.tools.length, (i) {
-            final active = i == _current;
-            final tool = widget.tools[i];
-            return GestureDetector(
-              onTap: () {
-                _ctrl.animateToPage(
-                  i,
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.easeOutCubic,
-                );
-                _auto.forward(from: 0);
-              },
-              child: AnimatedContainer(
-                duration: T.normal,
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                height: 5,
-                width: active ? 40 : 8,
-                decoration: BoxDecoration(
-                  gradient: active
-                      ? LinearGradient(
-                          colors: [tool.colors[0], tool.colors[1]])
-                      : null,
-                  color: active ? null : P.text5.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(R.pill),
-                ),
-              ),
-            );
-          }),
-        ),
-      ],
+      child: base,
     );
   }
 }
 
-class _ToolCard extends StatelessWidget {
-  final ToolData tool;
-  final bool isActive;
-  final VoidCallback onTap;
-  const _ToolCard({
-    required this.tool,
-    required this.isActive,
-    required this.onTap,
-  });
+class RoleChip extends StatelessWidget {
+  final String role;
+  final double fontSize;
 
-  @override
-  Widget build(BuildContext context) {
-    final c1 = tool.colors[0];
-    final c2 = tool.colors[1];
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        HapticFeedback.lightImpact();
-        onTap();
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(R.xl),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [c1, c2],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: c1.withOpacity(0.5),
-              blurRadius: 34,
-              spreadRadius: -6,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(R.xl),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Colors.white.withOpacity(0.16),
-                        Colors.transparent,
-                        Colors.black.withOpacity(0.35),
-                      ],
-                      stops: const [0.0, 0.4, 1.0],
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                right: -20,
-                bottom: -30,
-                child: Transform.rotate(
-                  angle: -0.2,
-                  child: Icon(
-                    tool.icon,
-                    size: 200,
-                    color: Colors.white.withOpacity(0.08),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(S.lg),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 52,
-                          height: 52,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.22),
-                            borderRadius: BorderRadius.circular(R.md),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.45),
-                              width: 1.3,
-                            ),
-                          ),
-                          child: Icon(tool.icon,
-                              color: Colors.white, size: 26),
-                        ),
-                        const Spacer(),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 7),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(R.pill),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                tool.isCoding ? 'OPEN' : 'EXPLORE',
-                                style: TextStyle(
-                                  fontFamily: Cfg.bugFont,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
-                                  color: c1,
-                                  letterSpacing: 1.5,
-                                  height: 1.0,
-                                ),
-                              ),
-                              const SizedBox(width: 5),
-                              Icon(
-                                Icons.arrow_forward_rounded,
-                                size: 12,
-                                color: c1,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const Spacer(),
-                    Text(
-                      tool.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        letterSpacing: 0.4,
-                        height: 1.05,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      tool.subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white.withOpacity(0.88),
-                      ),
-                    ),
-                    const SizedBox(height: S.md),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.4),
-                            borderRadius: BorderRadius.circular(R.xs),
-                            border: Border.all(
-                                color: Colors.white.withOpacity(0.2)),
-                          ),
-                          child: Text(
-                            tool.code,
-                            style: const TextStyle(
-                              fontFamily: Cfg.bugFont,
-                              fontSize: 8.5,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: 1.4,
-                              height: 1.0,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.4),
-                              borderRadius: BorderRadius.circular(R.xs),
-                              border: Border.all(
-                                  color: Colors.white.withOpacity(0.2)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  tool.statLabel,
-                                  style: TextStyle(
-                                    fontFamily: Cfg.bugFont,
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white.withOpacity(0.75),
-                                    letterSpacing: 1.0,
-                                    height: 1.0,
-                                  ),
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  tool.statValue,
-                                  style: const TextStyle(
-                                    fontFamily: Cfg.bugFont,
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                    height: 1.0,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// NEWS
-// ═════════════════════════════════════════════════════════════════
-
-class NewsData {
-  final String category;
-  final String title;
-  final String description;
-  final String source;
-  final String time;
-  final String imageUrl;
-  final Color c1;
-  final Color c2;
-  final IconData icon;
-  final bool isLive;
-  final String? linkUrl;
-  final DateTime? publishedAt;
-  const NewsData({
-    required this.category,
-    required this.title,
-    required this.description,
-    required this.source,
-    required this.time,
-    required this.imageUrl,
-    required this.c1,
-    required this.c2,
-    required this.icon,
-    this.isLive = false,
-    this.linkUrl,
-    this.publishedAt,
-  });
-}
-
-class NewsCarousel extends StatefulWidget {
-  final List<NewsData> items;
-  final bool loading;
-  final String? error;
-  final VoidCallback? onRetry;
-  const NewsCarousel({
+  const RoleChip({
     super.key,
-    required this.items,
-    this.loading = false,
-    this.error,
-    this.onRetry,
+    required this.role,
+    this.fontSize = 9,
   });
 
   @override
-  State<NewsCarousel> createState() => _NewsCarouselState();
-}
-
-class _NewsCarouselState extends State<NewsCarousel>
-    with TickerProviderStateMixin {
-  late PageController _ctrl;
-  late AnimationController _auto;
-  int _current = 0;
-  double _pageOffset = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = PageController(viewportFraction: 0.92);
-    _ctrl.addListener(() {
-      if (!mounted) return;
-      setState(() => _pageOffset = _ctrl.page ?? 0);
-    });
-    _auto = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 7),
-    )..addStatusListener((status) {
-        if (status == AnimationStatus.completed &&
-            mounted &&
-            widget.items.isNotEmpty) {
-          final next = (_current + 1) % widget.items.length;
-          _ctrl.animateToPage(
-            next,
-            duration: const Duration(milliseconds: 800),
-            curve: Curves.easeOutCubic,
-          );
-          _auto.forward(from: 0);
-        }
-      });
-    _auto.forward();
-  }
-
-  @override
-  void didUpdateWidget(covariant NewsCarousel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.items.length != widget.items.length &&
-        widget.items.isNotEmpty) {
-      _current = 0;
-      _auto.forward(from: 0);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _ctrl.hasClients) _ctrl.jumpToPage(0);
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    _auto.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (widget.items.isEmpty) return _empty();
-    return Column(
-      children: [
-        SizedBox(
-          height: 250,
-          child: PageView.builder(
-            controller: _ctrl,
-            physics: const BouncingScrollPhysics(),
-            itemCount: widget.items.length,
-            onPageChanged: (i) {
-              setState(() => _current = i);
-              _auto.forward(from: 0);
-            },
-            itemBuilder: (_, i) {
-              final item = widget.items[i];
-              final distance =
-                  (i - _pageOffset).abs().clamp(0.0, 1.0).toDouble();
-              final scale = 1.0 - distance * 0.05;
-              final opacity = 1.0 - distance * 0.25;
-              return AnimatedBuilder(
-                animation: _ctrl,
-                builder: (_, __) => Transform.scale(
-                  scale: scale,
-                  child: Opacity(
-                    opacity: opacity,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: _NewsCard(item: item),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: S.lg),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(widget.items.length, (i) {
-            final active = i == _current;
-            final item = widget.items[i];
-            return GestureDetector(
-              onTap: () {
-                _ctrl.animateToPage(
-                  i,
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.easeOutCubic,
-                );
-                _auto.forward(from: 0);
-              },
-              child: AnimatedContainer(
-                duration: T.normal,
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                height: 5,
-                width: active ? 42 : 8,
-                decoration: BoxDecoration(
-                  gradient: active
-                      ? LinearGradient(colors: [item.c1, item.c2])
-                      : null,
-                  color: active ? null : P.text5.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(R.pill),
-                ),
-              ),
-            );
-          }),
-        ),
-      ],
-    );
-  }
-
-  Widget _empty() {
+    final lower = role.toLowerCase();
+    final color = lower == 'owner'
+        ? Palette.pink
+        : lower == 'admin'
+            ? Palette.violet
+            : lower == 'vip'
+                ? Palette.amber
+                : Palette.text3;
+    final icon = lower == 'owner'
+        ? Icons.workspace_premium_rounded
+        : lower == 'admin'
+            ? Icons.shield_rounded
+            : lower == 'vip'
+                ? Icons.star_rounded
+                : Icons.person_rounded;
     return Container(
-      height: 250,
-      padding: const EdgeInsets.all(S.xl),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(R.xl),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF25133B), Color(0xFF100B20), Color(0xFF351320)],
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(Radii.pill),
+        border: Border.all(
+          color: color.withValues(alpha: 0.42),
+          width: 1,
         ),
-        border: Border.all(color: P.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.rss_feed_rounded, color: P.bone, size: 30),
-          const Spacer(),
-          Text(
-            widget.loading ? 'MENGAMBIL BERITA…' : 'BERITA BELUM TERSEDIA',
-            style: const TextStyle(
-              fontFamily: Cfg.bugFont,
-              color: P.bone,
-              fontWeight: FontWeight.w900,
-              fontSize: 17,
-              height: 1.1,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            widget.error ?? 'Menghubungkan ke feed berita.',
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                color: P.text2, fontSize: 11, height: 1.4),
-          ),
-          const SizedBox(height: S.md),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: widget.loading ? null : widget.onRetry,
-              icon: widget.loading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('PERBARUI BERITA'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NewsCard extends StatelessWidget {
-  final NewsData item;
-  const _NewsCard({required this.item});
-
-  @override
-  Widget build(BuildContext context) {
-    final imageUrl = item.imageUrl.trim().isNotEmpty
-        ? item.imageUrl.trim()
-        : _fallbackCover(item);
-
-    return GestureDetector(
-      onTap: () async {
-        HapticFeedback.lightImpact();
-        final rawUrl = item.linkUrl;
-        final uri = rawUrl == null ? null : Uri.tryParse(rawUrl);
-        if (uri == null) return;
-        try {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } catch (_) {}
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(R.xl),
-          boxShadow: [
-            BoxShadow(
-              color: item.c1.withOpacity(0.4),
-              blurRadius: 32,
-              spreadRadius: -8,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(R.xl),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: imageUrl.isEmpty
-                    ? _fallback()
-                    : Image.network(
-                        imageUrl,
-                        fit: BoxFit.cover,
-                        loadingBuilder: (_, child, progress) {
-                          if (progress == null) return child;
-                          return _loading();
-                        },
-                        errorBuilder: (_, __, ___) => _fallback(),
-                      ),
-              ),
-              Positioned.fill(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black.withOpacity(0.15),
-                        Colors.black.withOpacity(0.4),
-                        Colors.black.withOpacity(0.9),
-                      ],
-                      stops: const [0.0, 0.45, 1.0],
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(S.lg),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.6),
-                        borderRadius: BorderRadius.circular(R.xs),
-                        border: Border.all(
-                            color: Colors.white.withOpacity(0.22)),
-                      ),
-                      child: Text(
-                        item.category.toUpperCase(),
-                        style: const TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                          letterSpacing: 1.6,
-                          height: 1.0,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      item.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 19,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        height: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      item.description,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white.withOpacity(0.82),
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: S.md),
-                    Row(
-                      children: [
-                        _pill(Icons.access_time_rounded, item.time),
-                        const SizedBox(width: 6),
-                        _pill(Icons.source_rounded, item.source),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _fallback() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [item.c1, item.c2],
-        ),
-      ),
-      child: Center(
-        child: Icon(item.icon,
-            color: Colors.white.withOpacity(0.3), size: 80),
-      ),
-    );
-  }
-
-  Widget _loading() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [item.c1, item.c2],
-        ),
-      ),
-      child: Center(
-        child: SizedBox(
-          width: 26,
-          height: 26,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation(P.bone.withOpacity(0.7)),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pill(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.55),
-        borderRadius: BorderRadius.circular(R.xs),
-        border: Border.all(color: Colors.white.withOpacity(0.18)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 10, color: Colors.white.withOpacity(0.8)),
+          Icon(icon, size: fontSize + 1, color: color),
           const SizedBox(width: 4),
           Text(
-            text,
-            style: const TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: 9,
+            role.toUpperCase(),
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: fontSize,
               fontWeight: FontWeight.w900,
-              color: Colors.white,
-              letterSpacing: 0.8,
-              height: 1.0,
+              color: color,
+              letterSpacing: 1.0,
             ),
           ),
         ],
@@ -5192,1905 +2228,1097 @@ class _NewsCard extends StatelessWidget {
   }
 }
 
-String _fallbackCover(NewsData item) {
-  final lower = '${item.category} ${item.title}'.toLowerCase();
-  if (lower.contains('siber') ||
-      lower.contains('security') ||
-      lower.contains('hacker') ||
-      lower.contains('malware') ||
-      lower.contains('keamanan') ||
-      lower.contains('serangan')) {
-    return 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=1200&q=85';
-  }
-  return 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&q=85';
-}
+class SectionHeader extends StatelessWidget {
+  final String title;
+  final String? trailing;
+  final Color? trailingColor;
+  final Widget? trailingWidget;
+  final Color accent;
+  final IconData? icon;
 
-// ═════════════════════════════════════════════════════════════════
-// LIVE SERVICES
-// ═════════════════════════════════════════════════════════════════
-
-class WeatherData {
-  final String city;
-  final int temperature;
-  final int feelsLike;
-  final int humidity;
-  final int windSpeed;
-  final String condition;
-  final bool isDay;
-  final double precipitation;
-  final DateTime? updatedAt;
-  final DateTime? sunrise;
-  final DateTime? sunset;
-
-  const WeatherData({
-    required this.city,
-    required this.temperature,
-    required this.feelsLike,
-    required this.humidity,
-    required this.windSpeed,
-    required this.condition,
-    required this.isDay,
-    this.precipitation = 0,
-    this.updatedAt,
-    this.sunrise,
-    this.sunset,
-  });
-}
-
-class ChatMessageData {
-  final String id;
-  final String sender;
-  final String message;
-  final DateTime timestamp;
-
-  const ChatMessageData({
-    required this.id,
-    required this.sender,
-    required this.message,
-    required this.timestamp,
-  });
-
-  factory ChatMessageData.fromJson(Map<String, dynamic> json) {
-    return ChatMessageData(
-      id: '${json['id'] ?? ''}',
-      sender: '${json['sender'] ?? 'Unknown'}',
-      message: '${json['message'] ?? ''}',
-      timestamp: DateTime.tryParse('${json['timestamp'] ?? ''}') ??
-          DateTime.fromMillisecondsSinceEpoch(0),
-    );
-  }
-}
-
-class LiveServices {
-  static const Duration _timeout = Duration(seconds: 14);
-
-  static Future<String> _getText(Uri uri, {Map<String, String>? headers}) async {
-    final client = HttpClient()..connectionTimeout = _timeout;
-    try {
-      final request = await client.getUrl(uri).timeout(_timeout);
-      request.headers.set(HttpHeaders.userAgentHeader, 'NekoVerse/1.0');
-      headers?.forEach((k, v) => request.headers.set(k, v));
-      final response = await request.close().timeout(_timeout);
-      final body = await utf8.decoder.bind(response).join().timeout(_timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-            'Server mengembalikan HTTP ${response.statusCode}.');
-      }
-      return body;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<WeatherData> fetchWeather() async {
-    final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
-      'latitude': '-6.2088',
-      'longitude': '106.8456',
-      'current':
-          'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,is_day',
-      'daily': 'sunrise,sunset',
-      'timezone': 'Asia/Jakarta',
-      'wind_speed_unit': 'ms',
-    });
-    final body = await _getText(uri);
-    final decoded = jsonDecode(body);
-    if (decoded is! Map<String, dynamic> ||
-        decoded['current'] is! Map<String, dynamic>) {
-      throw const FormatException('Format data cuaca tidak valid.');
-    }
-    final current = decoded['current'] as Map<String, dynamic>;
-    final daily = decoded['daily'] is Map
-        ? decoded['daily'] as Map<String, dynamic>
-        : <String, dynamic>{};
-    DateTime? sunrise;
-    DateTime? sunset;
-    try {
-      final sunriseList = daily['sunrise'];
-      final sunsetList = daily['sunset'];
-      if (sunriseList is List && sunriseList.isNotEmpty) {
-        sunrise = DateTime.tryParse('${sunriseList.first}');
-      }
-      if (sunsetList is List && sunsetList.isNotEmpty) {
-        sunset = DateTime.tryParse('${sunsetList.first}');
-      }
-    } catch (_) {}
-
-    num value(String key) {
-      final raw = current[key];
-      if (raw is num) return raw;
-      return num.tryParse('$raw') ?? 0;
-    }
-
-    final code = value('weather_code').round();
-    final isDay = value('is_day').round() == 1;
-    return WeatherData(
-      city: 'Jakarta',
-      temperature: value('temperature_2m').round(),
-      feelsLike: value('apparent_temperature').round(),
-      humidity: value('relative_humidity_2m').round().clamp(0, 100).toInt(),
-      windSpeed: value('wind_speed_10m').round().clamp(0, 150).toInt(),
-      precipitation: value('precipitation').toDouble(),
-      condition: _weatherCondition(code, isDay),
-      isDay: isDay,
-      updatedAt: DateTime.now(),
-      sunrise: sunrise,
-      sunset: sunset,
-    );
-  }
-
-  static String _weatherCondition(int code, bool isDay) {
-    if (code == 0) return isDay ? 'Cerah' : 'Cerah malam';
-    if (code == 1) return 'Cerah berawan';
-    if (code == 2) return 'Berawan';
-    if (code == 3) return 'Mendung';
-    if (code == 45 || code == 48) return 'Berkabut';
-    if ([51, 53, 55, 56, 57].contains(code)) return 'Gerimis';
-    if ([61, 63, 65, 66, 67, 80, 81, 82].contains(code)) return 'Hujan';
-    if ([71, 73, 75, 77, 85, 86].contains(code)) return 'Hujan salju';
-    if (code == 95 || code == 96 || code == 99) return 'Badai petir';
-    return 'Cuaca berubah';
-  }
-
-  static Future<List<NewsData>> fetchNews() async {
-    const sources = <Map<String, String>>[
-      {
-        'url': 'https://feeds.feedburner.com/TheHackersNews',
-        'name': 'The Hacker News'
-      },
-      {
-        'url': 'https://www.bleepingcomputer.com/feed/',
-        'name': 'BleepingComputer'
-      },
-      {'url': 'https://www.kompas.com/getrss/tekno', 'name': 'Kompas Tekno'},
-    ];
-
-    final batches = await Future.wait(sources.map((source) async {
-      try {
-        final xml = await _getText(Uri.parse(source['url']!));
-        return _parseRss(xml, source['name']!);
-      } catch (_) {
-        return <NewsData>[];
-      }
-    }));
-
-    final results = <NewsData>[];
-    final seenTitles = <String>{};
-    for (final batch in batches) {
-      for (final article in batch) {
-        if (seenTitles.add(article.title.toLowerCase())) {
-          results.add(article);
-        }
-      }
-    }
-
-    if (results.isEmpty) {
-      final fallbackUri = Uri.https('news.google.com', '/rss/search', {
-        'q': 'teknologi OR "keamanan siber" OR AI when:2d',
-        'hl': 'id',
-        'gl': 'ID',
-        'ceid': 'ID:id',
-      });
-      final xml = await _getText(fallbackUri);
-      results.addAll(_parseRss(xml, 'Google News RSS'));
-    }
-
-    results.sort((a, b) {
-      final aDate = a.publishedAt ?? DateTime(1970);
-      final bDate = b.publishedAt ?? DateTime(1970);
-      return bDate.compareTo(aDate);
-    });
-    if (results.isEmpty) {
-      throw const FormatException(
-          'Feed berita kosong atau format RSS berubah.');
-    }
-    return results.take(12).toList(growable: false);
-  }
-
-  static List<NewsData> _parseRss(String xml, String defaultSource) {
-    final itemMatches = RegExp(
-      r'<item\b[^>]*>([\s\S]*?)</item>',
-      caseSensitive: false,
-    ).allMatches(xml);
-    final results = <NewsData>[];
-    final seenTitles = <String>{};
-
-    for (final itemMatch in itemMatches) {
-      final itemXml = itemMatch.group(1) ?? '';
-      String field(String tag) {
-        final match = RegExp(
-          r'<' + tag + r'(?:\s[^>]*)?>([\s\S]*?)</' + tag + r'>',
-          caseSensitive: false,
-        ).firstMatch(itemXml);
-        return _cleanXml(match?.group(1) ?? '');
-      }
-
-      final title = field('title').trim();
-      final link = field('link').trim();
-      final source = field('source').trim();
-      final description = field('description').trim();
-      final pubDate = field('pubDate').trim();
-      final validUri = Uri.tryParse(link);
-      if (title.isEmpty ||
-          link.isEmpty ||
-          validUri == null ||
-          (validUri.scheme != 'https' && validUri.scheme != 'http') ||
-          !seenTitles.add(title.toLowerCase())) {
-        continue;
-      }
-
-      DateTime? published;
-      if (pubDate.isNotEmpty) {
-        published = DateTime.tryParse(pubDate);
-        if (published == null) {
-          try {
-            published = HttpDate.parse(pubDate);
-          } catch (_) {
-            published = null;
-          }
-        }
-      }
-
-      final titleLower = title.toLowerCase();
-      final securityNews = defaultSource.toLowerCase().contains('hacker') ||
-          defaultSource.toLowerCase().contains('bleeping') ||
-          titleLower.contains('siber') ||
-          titleLower.contains('keamanan') ||
-          titleLower.contains('serangan');
-      final c1 = securityNews ? P.crimson : P.violet;
-      final c2 = securityNews ? P.bloodDeep : P.violetDeep;
-      results.add(NewsData(
-        category: securityNews ? 'KEAMANAN SIBER' : 'TEKNOLOGI',
-        title: title,
-        description: description.isEmpty
-            ? 'Buka sumber berita untuk membaca laporan lengkap.'
-            : (description.length > 190
-                ? '${description.substring(0, 187)}…'
-                : description),
-        source: source.isEmpty ? defaultSource : source,
-        time: _relativeAge(published),
-        imageUrl: _extractImageUrl(itemXml, link),
-        c1: c1,
-        c2: c2,
-        icon: securityNews ? Icons.security_rounded : Icons.newspaper_rounded,
-        isLive: published != null &&
-            DateTime.now().difference(published.toLocal()) <
-                const Duration(hours: 3),
-        linkUrl: link,
-        publishedAt: published,
-      ));
-    }
-    return results;
-  }
-
-  static String _extractImageUrl(String itemXml, String articleUrl) {
-    final patterns = <RegExp>[
-      RegExp(
-        r'''<img\b[^>]*\b(?:src|data-src|data-original)\s*=\s*["']([^"']+)["']''',
-        caseSensitive: false,
-      ),
-      RegExp(
-        r'''<(?:media:thumbnail|media:content)\b[^>]*\burl\s*=\s*["']([^"']+)["']''',
-        caseSensitive: false,
-      ),
-      RegExp(
-        r'''<enclosure\b[^>]*\burl\s*=\s*["']([^"']+)["'][^>]*/?>''',
-        caseSensitive: false,
-      ),
-    ];
-
-    final searchableXml = itemXml
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&amp;', '&');
-    for (final pattern in patterns) {
-      for (final match in pattern.allMatches(searchableXml)) {
-        var candidate = (match.group(1) ?? '').trim();
-        if (candidate.isEmpty) continue;
-        candidate = candidate
-            .replaceAll('&amp;', '&')
-            .replaceAll('&quot;', '"')
-            .replaceAll('&#39;', "'")
-            .replaceAll('&#x2F;', '/')
-            .replaceAll('&#47;', '/');
-
-        Uri? uri = Uri.tryParse(candidate);
-        final base = Uri.tryParse(articleUrl);
-        if (uri != null && uri.scheme.isEmpty && base != null) {
-          if (candidate.startsWith('//')) {
-            uri = Uri.tryParse('${base.scheme}:$candidate');
-          } else {
-            uri = base.resolveUri(uri);
-          }
-        }
-        if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) {
-          continue;
-        }
-
-        final lower = candidate.toLowerCase();
-        final looksLikeImage = RegExp(
-          r'\.(?:jpe?g|png|webp|gif|avif)(?:[?#].*)?$|(?:image|thumbnail|img|media)',
-          caseSensitive: false,
-        ).hasMatch(lower);
-        if (!looksLikeImage && pattern.pattern.contains('enclosure')) continue;
-        return uri.toString();
-      }
-    }
-    return '';
-  }
-
-  static String _cleanXml(String input) {
-    var value = input
-        .replaceAll(RegExp(r'<!\[CDATA\['), '')
-        .replaceAll(RegExp(r'\]\]>'), '')
-        .replaceAll(RegExp(r'<[^>]*>'), ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&apos;', "'")
-        .replaceAll('&#39;', "'");
-    value = value.replaceAllMapped(
-      RegExp(r'&#(x[0-9a-fA-F]+|[0-9]+);'),
-      (match) {
-        final raw = match.group(1)!;
-        final code = raw.startsWith('x')
-            ? int.tryParse(raw.substring(1), radix: 16)
-            : int.tryParse(raw);
-        return code == null ? match.group(0)! : String.fromCharCode(code);
-      },
-    );
-    return value.replaceAll(RegExp(r'\s+'), ' ').trim();
-  }
-
-  static String _relativeAge(DateTime? published) {
-    if (published == null) return 'TERBARU';
-    final age = DateTime.now().difference(published.toLocal());
-    if (age.isNegative || age.inMinutes < 2) return 'BARU SAJA';
-    if (age.inMinutes < 60) return '${age.inMinutes} MENIT';
-    if (age.inHours < 24) return '${age.inHours} JAM';
-    return '${age.inDays} HARI';
-  }
-
-  static Map<String, String> _authHeaders() {
-    final token = AppSession.token ?? '';
-    final device = AppSession.deviceId ?? '';
-    return {
-      if (token.isNotEmpty) HttpHeaders.authorizationHeader: 'Bearer $token',
-      if (device.isNotEmpty) 'X-Device-ID': device,
-      HttpHeaders.acceptHeader: 'application/json',
-    };
-  }
-
-  // ─── STORY (dengan media support) ───
-  static Future<List<StoryData>> fetchStories() async {
-    final token = AppSession.token;
-    final deviceId = AppSession.deviceId;
-    if (token == null ||
-        token.isEmpty ||
-        deviceId == null ||
-        deviceId.isEmpty) {
-      throw const HttpException('Sesi login belum tersedia.');
-    }
-
-    final uri = Uri.parse('${Cfg.backendBase}/api/chats/stories');
-    final client = HttpClient()..connectionTimeout = _timeout;
-    try {
-      final request = await client.getUrl(uri).timeout(_timeout);
-      _authHeaders().forEach((k, v) => request.headers.set(k, v));
-      final response = await request.close().timeout(_timeout);
-      final body =
-          await utf8.decoder.bind(response).join().timeout(_timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-            'Server story mengembalikan HTTP ${response.statusCode}.');
-      }
-
-      final decoded = jsonDecode(body);
-      if (decoded is! List) {
-        throw const FormatException('Format story dari backend tidak valid.');
-      }
-
-      const palettes = <List<Color>>[
-        [P.violet, P.violetDeep],
-        [P.crimson, P.bloodDeep],
-        [P.teal, P.rot],
-        [P.orange, P.rust],
-        [P.cyan, P.cyanDeep],
-        [P.pink, P.pinkDeep],
-      ];
-
-      final currentUser =
-          (AppSession.profile?.username ?? '').toLowerCase();
-      final currentAvatarPath = AppSession.profile?.avatarPath ?? '';
-
-      final results = <StoryData>[];
-      for (final item in decoded) {
-        if (item is! Map) continue;
-        final record = Map<String, dynamic>.from(item);
-        final username = '${record['username'] ?? 'Guest'}'.trim();
-        final storyText = '${record['text'] ?? ''}'.trim();
-        final mediaUrl = '${record['media_url'] ?? ''}'.trim();
-        final mediaTypeStr = '${record['media_type'] ?? 'text'}'.trim();
-
-        final rawCreated =
-            '${record['timestamp'] ?? record['created_at'] ?? ''}';
-        final createdAt = DateTime.tryParse(rawCreated);
-
-        // skip kalau username kosong DAN tidak ada text DAN tidak ada media
-        if (username.isEmpty) continue;
-        if (storyText.isEmpty && mediaUrl.isEmpty) continue;
-        if (createdAt == null) continue;
-
-        final safeName = username;
-        final paletteIndex = safeName.codeUnits
-                .fold<int>(0, (sum, unit) => sum + unit) %
-            palettes.length;
-        final palette = palettes[paletteIndex];
-        final isOwn = safeName.toLowerCase() == currentUser;
-
-        StoryMediaType mediaType = StoryMediaType.text;
-        if (mediaTypeStr.toLowerCase() == 'image') {
-          mediaType = StoryMediaType.image;
-        } else if (mediaTypeStr.toLowerCase() == 'video') {
-          mediaType = StoryMediaType.video;
-        } else if (mediaUrl.isNotEmpty) {
-          final lower = mediaUrl.toLowerCase();
-          if (lower.contains('.mp4') ||
-              lower.contains('.mov') ||
-              lower.contains('.webm')) {
-            mediaType = StoryMediaType.video;
-          } else {
-            mediaType = StoryMediaType.image;
-          }
-        }
-
-        results.add(StoryData(
-          id: '${record['id'] ?? ''}',
-          username: safeName,
-          avatarText: safeName.charactersFirst,
-          avatarPath: isOwn ? currentAvatarPath : '',
-          c1: palette[0],
-          c2: palette[1],
-          isOwn: isOwn,
-          isLive: DateTime.now().difference(createdAt.toLocal()) <
-              const Duration(hours: 3),
-          storyText: storyText.isEmpty ? null : storyText,
-          mediaUrl: mediaUrl.isEmpty ? null : mediaUrl,
-          mediaType: mediaType,
-          createdAt: createdAt,
-        ));
-      }
-      return results;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<void> publishStory({
-    required String username,
-    required String text,
-    String? mediaUrl,
-    StoryMediaType mediaType = StoryMediaType.text,
-  }) async {
-    final token = AppSession.token;
-    final deviceId = AppSession.deviceId;
-    if (token == null ||
-        token.isEmpty ||
-        deviceId == null ||
-        deviceId.isEmpty) {
-      throw const HttpException('Sesi login belum tersedia.');
-    }
-
-    final uri = Uri.parse('${Cfg.backendBase}/api/chats/stories');
-    final client = HttpClient()..connectionTimeout = _timeout;
-    try {
-      final request = await client.postUrl(uri).timeout(_timeout);
-      request.headers.contentType = ContentType.json;
-      _authHeaders().forEach((k, v) => request.headers.set(k, v));
-      request.write(jsonEncode({
-        'text': text.trim(),
-        'media_url': mediaUrl ?? '',
-        'media_type': mediaType.name,
-      }));
-
-      final response = await request.close().timeout(_timeout);
-      final body =
-          await utf8.decoder.bind(response).join().timeout(_timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-            'Server story mengembalikan HTTP ${response.statusCode}.');
-      }
-      final decoded = body.isEmpty ? null : jsonDecode(body);
-      if (decoded is Map && decoded['ok'] != true) {
-        throw HttpException(
-            '${decoded['message'] ?? decoded['error'] ?? 'Story gagal dipublikasi.'}');
-      }
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<List<ChatMessageData>> fetchChats() async {
-    final token = AppSession.token;
-    final deviceId = AppSession.deviceId;
-    if (token == null ||
-        token.isEmpty ||
-        deviceId == null ||
-        deviceId.isEmpty) {
-      throw const HttpException('Sesi login belum tersedia.');
-    }
-
-    final uri = Uri.parse('${Cfg.backendBase}/api/chats');
-    final client = HttpClient()..connectionTimeout = _timeout;
-    try {
-      final request = await client.getUrl(uri).timeout(_timeout);
-      _authHeaders().forEach((k, v) => request.headers.set(k, v));
-      final response = await request.close().timeout(_timeout);
-      final body =
-          await utf8.decoder.bind(response).join().timeout(_timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-            'Server chat mengembalikan HTTP ${response.statusCode}.');
-      }
-      final decoded = jsonDecode(body);
-      if (decoded is! List) {
-        throw const FormatException('Format chat dari backend tidak valid.');
-      }
-      return decoded
-          .whereType<Map>()
-          .map((raw) =>
-              ChatMessageData.fromJson(Map<String, dynamic>.from(raw)))
-          .toList(growable: false);
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<ChatMessageData> sendChat(String message) async {
-    final token = AppSession.token;
-    final deviceId = AppSession.deviceId;
-    if (token == null ||
-        token.isEmpty ||
-        deviceId == null ||
-        deviceId.isEmpty) {
-      throw const HttpException('Sesi login belum tersedia.');
-    }
-
-    final uri = Uri.parse('${Cfg.backendBase}/api/chats');
-    final client = HttpClient()..connectionTimeout = _timeout;
-    try {
-      final request = await client.postUrl(uri).timeout(_timeout);
-      request.headers.contentType = ContentType.json;
-      _authHeaders().forEach((k, v) => request.headers.set(k, v));
-      request.write(jsonEncode({'message': message.trim()}));
-
-      final response = await request.close().timeout(_timeout);
-      final body =
-          await utf8.decoder.bind(response).join().timeout(_timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-            'Server chat mengembalikan HTTP ${response.statusCode}.');
-      }
-      final decoded = jsonDecode(body);
-      if (decoded is! Map || decoded['ok'] != true || decoded['item'] is! Map) {
-        throw const FormatException('Respons chat tidak valid.');
-      }
-      return ChatMessageData.fromJson(
-          Map<String, dynamic>.from(decoded['item'] as Map));
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static Future<Map<String, dynamic>> fetchBackendStatus() async {
-    final uri = Uri.parse('${Cfg.backendBase}/api/status');
-    final body = await _getText(uri);
-    final decoded = jsonDecode(body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('Respons status backend tidak valid.');
-    }
-    return decoded;
-  }
-}
-
-extension _FirstCharacter on String {
-  String get charactersFirst =>
-      isEmpty ? '?' : substring(0, 1).toUpperCase();
-}
-
-// ═════════════════════════════════════════════════════════════════
-// WEATHER CARD
-// ═════════════════════════════════════════════════════════════════
-
-class WeatherCard extends StatefulWidget {
-  final WeatherData? data;
-  final bool loading;
-  final String? error;
-  final VoidCallback? onRefresh;
-  const WeatherCard({
+  const SectionHeader({
     super.key,
-    required this.data,
-    this.loading = false,
-    this.error,
-    this.onRefresh,
+    required this.title,
+    this.trailing,
+    this.trailingColor,
+    this.trailingWidget,
+    this.accent = Palette.violet,
+    this.icon,
   });
-
-  @override
-  State<WeatherCard> createState() => _WeatherCardState();
-}
-
-class _WeatherCardState extends State<WeatherCard>
-    with TickerProviderStateMixin {
-  late AnimationController _arc;
-
-  @override
-  void initState() {
-    super.initState();
-    _arc = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..forward();
-  }
-
-  @override
-  void dispose() {
-    _arc.dispose();
-    super.dispose();
-  }
-
-  double get _sunProgress {
-    final d = widget.data;
-    if (d == null || d.sunrise == null || d.sunset == null) {
-      return d?.isDay == true ? 0.5 : 0.15;
-    }
-    final now = DateTime.now();
-    final rise = d.sunrise!;
-    final set = d.sunset!;
-    if (now.isBefore(rise)) return 0.0;
-    if (now.isAfter(set)) return 1.0;
-    final total = set.difference(rise).inSeconds;
-    final passed = now.difference(rise).inSeconds;
-    return (passed / total).clamp(0.0, 1.0);
-  }
 
   @override
   Widget build(BuildContext context) {
-    final d = widget.data;
-    if (d == null) return _placeholder();
-    final bgAsset = d.isDay ? Cfg.siang : Cfg.malam;
+    return Row(
+      children: [
+        Container(
+          width: 3,
+          height: 14,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [accent, accent.withValues(alpha: 0.3)],
+            ),
+            borderRadius: BorderRadius.circular(2),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withValues(alpha: 0.6),
+                blurRadius: 8,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Spc.sm),
+        if (icon != null) ...[
+          Icon(icon, size: 12, color: accent),
+          const SizedBox(width: 4),
+        ],
+        Text(
+          title,
+          style: const TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 2.2,
+            color: Palette.text,
+          ),
+        ),
+        const SizedBox(width: Spc.sm),
+        Expanded(
+          child: Container(
+            height: 1,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Palette.border,
+                  Palette.border.withValues(alpha: 0.0),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: Spc.sm),
+        if (trailingWidget != null)
+          trailingWidget!
+        else if (trailing != null)
+          Text(
+            trailing!,
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.4,
+              color: trailingColor ?? Palette.text3,
+            ),
+          ),
+      ],
+    );
+  }
+}
 
+class SectionTabData {
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const SectionTabData({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+}
+
+class PremiumTabBar extends StatelessWidget {
+  final TabController controller;
+  final List<SectionTabData> tabs;
+
+  const PremiumTabBar({
+    super.key,
+    required this.controller,
+    required this.tabs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      height: 260,
+      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(R.xxl),
+        color: Palette.surface.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(Radii.lg),
+        border: Border.all(color: Palette.border, width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: (d.isDay ? P.amber : P.violet).withOpacity(0.35),
-            blurRadius: 38,
-            spreadRadius: -8,
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(R.xxl),
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: d.isDay
-                        ? const [
-                            Color(0xFFD18A56),
-                            Color(0xFF8D5364),
-                            Color(0xFF302343)
-                          ]
-                        : const [
-                            Color(0xFF5A4A88),
-                            Color(0xFF26345B),
-                            Color(0xFF0D1020)
-                          ],
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: 0.65,
-                child: Image.asset(
-                  bgAsset,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(0.02),
-                      Colors.black.withOpacity(0.14),
-                      Colors.black.withOpacity(0.42),
-                    ],
-                    stops: const [0.0, 0.5, 1.0],
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 18,
-              right: 92,
-              child: Material(
-                color: Colors.black.withOpacity(0.4),
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: widget.loading ? null : widget.onRefresh,
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: Center(
-                      child: widget.loading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Icon(Icons.refresh_rounded,
-                              color: Colors.white, size: 18),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(S.xl),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 5),
+      child: AnimatedBuilder(
+        animation: controller,
+        builder: (_, __) {
+          return Row(
+            children: List<Widget>.generate(tabs.length, (i) {
+              final active = controller.index == i;
+              final tab = tabs[i];
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    controller.animateTo(i);
+                  },
+                  child: AnimatedContainer(
+                    duration: Timings.normal,
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.symmetric(vertical: Spc.md),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.45),
-                      borderRadius: BorderRadius.circular(R.pill),
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.22)),
+                      gradient: active
+                          ? LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                tab.color.withValues(alpha: 0.28),
+                                tab.color.withValues(alpha: 0.08),
+                              ],
+                            )
+                          : null,
+                      borderRadius: BorderRadius.circular(Radii.md),
+                      border: active
+                          ? Border.all(
+                              color: tab.color.withValues(alpha: 0.6),
+                              width: 1.2,
+                            )
+                          : null,
+                      boxShadow: active
+                          ? [
+                              BoxShadow(
+                                color: tab.color.withValues(alpha: 0.35),
+                                blurRadius: 18,
+                                spreadRadius: -3,
+                              ),
+                            ]
+                          : null,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                    child: Column(
                       children: [
-                        const Icon(Icons.location_on_rounded,
-                            size: 11, color: P.bone),
-                        const SizedBox(width: 5),
+                        AnimatedScale(
+                          scale: active ? 1.15 : 1.0,
+                          duration: Timings.normal,
+                          curve: Curves.easeOutBack,
+                          child: Icon(
+                            tab.icon,
+                            size: 16,
+                            color: active ? tab.color : Palette.text3,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
                         Text(
-                          d.city.toUpperCase(),
-                          style: const TextStyle(
-                            fontFamily: Cfg.bugFont,
-                            fontSize: 9.5,
+                          tab.label.toUpperCase(),
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 9,
                             fontWeight: FontWeight.w900,
-                            color: P.bone,
-                            letterSpacing: 1.4,
-                            height: 1.0,
+                            color: active ? tab.color : Palette.text3,
+                            letterSpacing: 1.2,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const Spacer(),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '${d.temperature}',
-                        style: const TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 60,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                          letterSpacing: -2,
-                          height: 1.0,
+                ),
+              );
+            }),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class FilterChipWidget extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color color;
+  final VoidCallback onTap;
+  final int? count;
+
+  const FilterChipWidget({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.color,
+    required this.onTap,
+    this.count,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TapScale(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: Timings.fast,
+        padding: const EdgeInsets.symmetric(
+          horizontal: Spc.md,
+          vertical: Spc.sm,
+        ),
+        decoration: BoxDecoration(
+          gradient: selected
+              ? LinearGradient(
+                  colors: [
+                    color.withValues(alpha: 0.28),
+                    color.withValues(alpha: 0.08),
+                  ],
+                )
+              : null,
+          color: selected ? null : Palette.surface.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(Radii.pill),
+          border: Border.all(
+            color: selected ? color.withValues(alpha: 0.65) : Palette.border,
+            width: 1,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.35),
+                    blurRadius: 14,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label.toUpperCase(),
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 9.5,
+                fontWeight: FontWeight.w900,
+                color: selected ? color : Palette.text3,
+                letterSpacing: 1.2,
+              ),
+            ),
+            if (count != null) ...[
+              const SizedBox(width: 5),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 5,
+                  vertical: 1,
+                ),
+                decoration: BoxDecoration(
+                  color: (selected ? color : Palette.text3)
+                      .withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(Radii.pill),
+                ),
+                child: Text(
+                  count.toString(),
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    color: selected ? color : Palette.text3,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum UserSort { name, role, status, expiry }
+
+class FullScreenCarousel extends StatefulWidget {
+  final List<CarouselSlide> slides;
+  final void Function(CarouselSlide slide) onTap;
+
+  const FullScreenCarousel({
+    super.key,
+    required this.slides,
+    required this.onTap,
+  });
+
+  @override
+  State<FullScreenCarousel> createState() => _FullScreenCarouselState();
+}
+
+class _FullScreenCarouselState extends State<FullScreenCarousel> {
+  late PageController _controller;
+  int _current = 0;
+  Timer? _auto;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController(viewportFraction: 1.0);
+    _auto = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (!mounted || widget.slides.isEmpty) return;
+      final next = (_current + 1) % widget.slides.length;
+      _controller.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _auto?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.slides.isEmpty) return const SizedBox.shrink();
+    return Column(
+      children: [
+        FloatWrap(
+          amplitude: 5,
+          period: const Duration(seconds: 5),
+          child: SizedBox(
+            height: 215,
+            child: PageView.builder(
+              controller: _controller,
+              physics: const BouncingScrollPhysics(),
+              itemCount: widget.slides.length,
+              onPageChanged: (i) => setState(() => _current = i),
+              itemBuilder: (_, i) {
+                final slide = widget.slides[i];
+                return _CarouselSlideView(
+                  slide: slide,
+                  onTap: () => widget.onTap(slide),
+                  isActive: i == _current,
+                );
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: Spc.md),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List<Widget>.generate(widget.slides.length, (i) {
+            final active = i == _current;
+            return AnimatedContainer(
+              duration: Timings.normal,
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              height: 4,
+              width: active ? 30 : 8,
+              decoration: BoxDecoration(
+                color:
+                    active ? Palette.violet : Palette.text3.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(Radii.pill),
+                boxShadow: active
+                    ? [
+                        BoxShadow(
+                          color: Palette.violet.withValues(alpha: 0.7),
+                          blurRadius: 10,
+                        ),
+                      ]
+                    : null,
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+}
+
+class _CarouselSlideView extends StatelessWidget {
+  final CarouselSlide slide;
+  final VoidCallback onTap;
+  final bool isActive;
+
+  const _CarouselSlideView({
+    required this.slide,
+    required this.onTap,
+    required this.isActive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: AnimatedScale(
+        scale: isActive ? 1.0 : 0.94,
+        duration: Timings.normal,
+        curve: Curves.easeOut,
+        child: TapScale(
+          onTap: onTap,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Radii.xl),
+              border: Border.all(color: slide.accent, width: 1.4),
+              boxShadow: [
+                BoxShadow(
+                  color: slide.accent.withValues(alpha: 0.45),
+                  blurRadius: 26,
+                  spreadRadius: -6,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(Radii.xl - 1),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Image.asset(
+                      AppConfig.assetPage,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Palette.surface, slide.accent2],
+                          ),
                         ),
                       ),
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 12, left: 4),
-                        child: Text(
-                          '°C',
-                          style: TextStyle(
-                            fontFamily: Cfg.bugFont,
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Palette.bg0.withValues(alpha: 0.35),
+                            Palette.bg0.withValues(alpha: 0.60),
+                            slide.accent.withValues(alpha: 0.35),
+                          ],
+                          stops: const [0.0, 0.55, 1.0],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 14,
+                    left: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Palette.bg0.withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(Radii.xs),
+                        border: Border.all(color: slide.accent, width: 1),
+                      ),
+                      child: Text(
+                        slide.code,
+                        style: TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          color: slide.accent,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 14,
+                    right: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: slide.accent.withValues(alpha: 0.24),
+                        borderRadius: BorderRadius.circular(Radii.xs),
+                        border: Border.all(
+                          color: slide.accent.withValues(alpha: 0.7),
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        slide.badge,
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: 1.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: -26,
+                    bottom: -22,
+                    child: Icon(
+                      slide.icon,
+                      size: 150,
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(Spc.lg),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Spacer(),
+                        Text(
+                          slide.title,
+                          style: const TextStyle(
+                            fontFamily: AppConfig.fontBug,
                             fontSize: 24,
                             fontWeight: FontWeight.w900,
                             color: Colors.white,
+                            letterSpacing: 1.6,
                             height: 1.0,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black54,
+                                blurRadius: 8,
+                              ),
+                            ],
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 14),
-                          child: Text(
-                            d.condition.toUpperCase(),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontFamily: Cfg.bugFont,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white.withOpacity(0.95),
-                              height: 1.15,
+                        const SizedBox(height: 6),
+                        Text(
+                          slide.subtitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white.withValues(alpha: 0.85),
+                            letterSpacing: 0.4,
+                            height: 1.35,
+                          ),
+                        ),
+                        const SizedBox(height: Spc.md),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: slide.accent,
+                                borderRadius:
+                                    BorderRadius.circular(Radii.pill),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color:
+                                        slide.accent.withValues(alpha: 0.6),
+                                    blurRadius: 14,
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    slide.cta,
+                                    style: const TextStyle(
+                                      fontFamily: AppConfig.fontBug,
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      letterSpacing: 1.6,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  const Icon(
+                                    Icons.arrow_forward_rounded,
+                                    size: 12,
+                                    color: Colors.white,
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
+                            const Spacer(),
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Palette.bg0.withValues(alpha: 0.6),
+                                borderRadius:
+                                    BorderRadius.circular(Radii.sm),
+                                border: Border.all(
+                                  color:
+                                      slide.accent.withValues(alpha: 0.5),
+                                ),
+                              ),
+                              child: Icon(
+                                slide.icon,
+                                size: 18,
+                                color: slide.accent,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: S.md),
-                  Row(
-                    children: [
-                      _stat(Icons.thermostat_rounded, 'TERASA',
-                          '${d.feelsLike}°C'),
-                      const SizedBox(width: 6),
-                      _stat(Icons.water_drop_rounded, 'LEMBAP',
-                          '${d.humidity}%'),
-                      const SizedBox(width: 6),
-                      _stat(Icons.air_rounded, 'ANGIN',
-                          '${d.windSpeed} m/s'),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _placeholder() {
-    return Container(
-      height: 260,
-      padding: const EdgeInsets.all(S.xl),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(R.xxl),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFB56D4D), Color(0xFF5D385A), Color(0xFF17192E)],
-        ),
-        border: Border.all(color: P.bone.withOpacity(0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'CUACA JAKARTA',
-            style: TextStyle(
-              fontFamily: Cfg.bugFont,
-              color: P.bone,
-              fontSize: 11,
-              letterSpacing: 1.3,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const Spacer(),
-          Text(
-            widget.loading
-                ? 'MENGAMBIL DATA CUACA…'
-                : 'DATA CUACA BELUM TERSEDIA',
-            style: const TextStyle(
-              fontFamily: Cfg.bugFont,
-              color: Colors.white,
-              fontSize: 17,
-              fontWeight: FontWeight.w900,
-              height: 1.1,
-            ),
-          ),
-          const SizedBox(height: 7),
-          Text(
-            widget.error ?? 'Menghubungkan ke layanan cuaca.',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 11, height: 1.35),
-          ),
-          const SizedBox(height: S.md),
-          Align(
-            alignment: Alignment.bottomLeft,
-            child: OutlinedButton.icon(
-              onPressed: widget.loading ? null : widget.onRefresh,
-              icon: widget.loading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('COBA LAGI'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side:
-                    BorderSide(color: Colors.white.withOpacity(0.45)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stat(IconData icon, String label, String value) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.45),
-          borderRadius: BorderRadius.circular(R.sm),
-          border: Border.all(color: Colors.white.withOpacity(0.18)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 13, color: P.bone),
-            const SizedBox(width: 5),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 7,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone.withOpacity(0.65),
-                      letterSpacing: 0.9,
-                      height: 1.0,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone,
-                      height: 1.0,
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-// ═════════════════════════════════════════════════════════════════
-// ORBITAL MENU
-// ═════════════════════════════════════════════════════════════════
-
-class OrbitalItem {
-  final String label;
-  final String sub;
+class NavItem {
   final IconData icon;
-  final Color c1;
-  final Color c2;
-  final VoidCallback onTap;
-  const OrbitalItem({
-    required this.label,
-    required this.sub,
-    required this.icon,
-    required this.c1,
-    required this.c2,
-    required this.onTap,
-  });
-}
-
-class OrbitalMenu extends StatefulWidget {
-  final List<OrbitalItem> items;
-  final double height;
-  const OrbitalMenu({super.key, required this.items, this.height = 380});
-
-  @override
-  State<OrbitalMenu> createState() => _OrbitalMenuState();
-}
-
-class _OrbitalMenuState extends State<OrbitalMenu>
-    with TickerProviderStateMixin {
-  late AnimationController _orbit;
-  late AnimationController _logoPulse;
-  late AnimationController _ringSpin;
-  late AnimationController _ringSpinReverse;
-  late AnimationController _entrance;
-  String? _selectedLabel;
-
-  @override
-  void initState() {
-    super.initState();
-    _orbit = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 70),
-    )..repeat();
-    _logoPulse = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat();
-    _ringSpin = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 26),
-    )..repeat();
-    _ringSpinReverse = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 38),
-    )..repeat();
-    _entrance = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    )..forward();
-  }
-
-  @override
-  void dispose() {
-    _orbit.dispose();
-    _logoPulse.dispose();
-    _ringSpin.dispose();
-    _ringSpinReverse.dispose();
-    _entrance.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = widget.items;
-    final count = items.length;
-
-    return SizedBox(
-      height: widget.height,
-      width: double.infinity,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final w = constraints.maxWidth;
-          final h = constraints.maxHeight;
-          final shortest = math.min(w, h);
-          final center = Offset(w / 2, h / 2);
-          final orbitRadius = shortest * 0.33;
-          final planetSize = shortest * 0.16;
-          final logoSize = shortest * 0.26;
-
-          return AnimatedBuilder(
-            animation: Listenable.merge([
-              _orbit,
-              _logoPulse,
-              _ringSpin,
-              _ringSpinReverse,
-              _entrance,
-            ]),
-            builder: (_, __) {
-              final rotation = _orbit.value * 2 * math.pi;
-              final pulse = _logoPulse.value;
-
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(
-                        painter: _OrbitBackdropPainter(
-                          center: center,
-                          orbitRadius: orbitRadius,
-                          rotation: rotation,
-                          planetSize: planetSize,
-                          pulse: pulse,
-                        ),
-                      ),
-                    ),
-                  ),
-                  ...List.generate(count, (i) {
-                    final angle =
-                        (i / count) * 2 * math.pi - math.pi / 2 + rotation;
-                    final dx = math.cos(angle) * orbitRadius;
-                    final dy = math.sin(angle) * orbitRadius;
-                    final pos = center + Offset(dx, dy);
-
-                    final delay = i * 0.07;
-                    final localT = ((_entrance.value * 1.3) - delay)
-                        .clamp(0.0, 1.0)
-                        .toDouble();
-                    final scale = Curves.easeOutBack.transform(localT);
-                    final selected = _selectedLabel == items[i].label;
-
-                    return Positioned(
-                      left: pos.dx - planetSize / 2,
-                      top: pos.dy - planetSize / 2,
-                      width: planetSize,
-                      height: planetSize,
-                      child: Transform.scale(
-                        scale: scale.clamp(0.0, 1.2).toDouble(),
-                        child: Opacity(
-                          opacity: localT.clamp(0.0, 1.0).toDouble(),
-                          child: _PlanetItem(
-                            item: items[i],
-                            size: planetSize,
-                            selected: selected,
-                            pulse: pulse,
-                            onTap: () {
-                              HapticFeedback.lightImpact();
-                              setState(
-                                  () => _selectedLabel = items[i].label);
-                              items[i].onTap();
-                            },
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                  Positioned(
-                    left: center.dx - logoSize / 2,
-                    top: center.dy - logoSize / 2,
-                    width: logoSize,
-                    height: logoSize,
-                    child: IgnorePointer(
-                      child: _CenterLogo(
-                        size: logoSize,
-                        pulse: pulse,
-                        rotate: _ringSpin,
-                        rotateReverse: _ringSpinReverse,
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _OrbitBackdropPainter extends CustomPainter {
-  final Offset center;
-  final double orbitRadius;
-  final double rotation;
-  final double planetSize;
-  final double pulse;
-
-  _OrbitBackdropPainter({
-    required this.center,
-    required this.orbitRadius,
-    required this.rotation,
-    required this.planetSize,
-    required this.pulse,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final glowRect =
-        Rect.fromCircle(center: center, radius: orbitRadius * 1.6);
-    canvas.drawCircle(
-      center,
-      orbitRadius * 1.55,
-      Paint()
-        ..shader = RadialGradient(
-          colors: [P.blood.withOpacity(0.16), P.blood.withOpacity(0.0)],
-        ).createShader(glowRect),
-    );
-
-    canvas.drawCircle(
-      center,
-      orbitRadius,
-      Paint()
-        ..color = P.blood.withOpacity(0.28)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
-    );
-
-    canvas.drawCircle(
-      center,
-      orbitRadius - planetSize * 0.85,
-      Paint()
-        ..color = P.violet.withOpacity(0.1)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
-    );
-
-    canvas.drawCircle(
-      center,
-      orbitRadius + planetSize * 0.75,
-      Paint()
-        ..color = P.crimson.withOpacity(0.12)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
-    );
-
-    canvas.drawCircle(
-      center,
-      orbitRadius + planetSize * 0.75 + pulse * 8,
-      Paint()
-        ..color = P.bloodBright.withOpacity(0.16 * (1 - pulse))
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _OrbitBackdropPainter old) => true;
-}
-
-class _PlanetItem extends StatefulWidget {
-  final OrbitalItem item;
-  final double size;
-  final bool selected;
-  final double pulse;
-  final VoidCallback onTap;
-
-  const _PlanetItem({
-    required this.item,
-    required this.size,
-    required this.selected,
-    required this.pulse,
-    required this.onTap,
-  });
-
-  @override
-  State<_PlanetItem> createState() => _PlanetItemState();
-}
-
-class _PlanetItemState extends State<_PlanetItem> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final size = widget.size;
-    final selected = widget.selected;
-    final glow = 0.55 + math.sin(widget.pulse * math.pi * 2) * 0.28;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
-      onTap: widget.onTap,
-      child: AnimatedScale(
-        scale: _pressed ? 0.88 : (selected ? 1.15 : 1.0),
-        duration: T.normal,
-        curve: Curves.easeOutBack,
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: size,
-                height: size,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: widget.item.c1
-                          .withOpacity(selected ? 0.9 : 0.5 * glow),
-                      blurRadius: selected ? 30 : 22,
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                width: size,
-                height: size,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    center: const Alignment(-0.4, -0.5),
-                    radius: 1.1,
-                    colors: [
-                      Color.lerp(P.bone, widget.item.c1, 0.35)!,
-                      widget.item.c1,
-                      widget.item.c2,
-                    ],
-                    stops: const [0.0, 0.55, 1.0],
-                  ),
-                  border: Border.all(
-                    color: P.bone.withOpacity(selected ? 0.85 : 0.45),
-                    width: selected ? 1.8 : 1.2,
-                  ),
-                ),
-              ),
-              Container(
-                width: size * 0.52,
-                height: size * 0.52,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.black.withOpacity(0.25),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.25),
-                    width: 1,
-                  ),
-                ),
-                child: Icon(
-                  widget.item.icon,
-                  color: P.bone,
-                  size: size * 0.32,
-                ),
-              ),
-              if (selected)
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: P.bone.withOpacity(0.9),
-                        width: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CenterLogo extends StatelessWidget {
-  final double size;
-  final double pulse;
-  final Animation<double> rotate;
-  final Animation<double> rotateReverse;
-
-  const _CenterLogo({
-    required this.size,
-    required this.pulse,
-    required this.rotate,
-    required this.rotateReverse,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final glow = 0.55 + math.sin(pulse * math.pi * 2) * 0.28;
-
-    return RepaintBoundary(
-      child: AnimatedBuilder(
-        animation: Listenable.merge([rotate, rotateReverse]),
-        builder: (_, __) {
-          return SizedBox(
-            width: size,
-            height: size,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: size,
-                  height: size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: P.crimson.withOpacity(glow * 0.65),
-                        blurRadius: 44,
-                        spreadRadius: 4,
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  width: size * 0.78,
-                  height: size * 0.78,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [P.crimson, P.blood, P.violetDeep],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: P.crimson.withOpacity(0.7),
-                        blurRadius: 24,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                  child: Container(
-                    margin: const EdgeInsets.all(3),
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: P.bgDeep,
-                    ),
-                    child: ClipOval(
-                      child: Image.asset(
-                        Cfg.logoPage,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [P.blood, P.violetDeep],
-                            ),
-                          ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.remove_red_eye_rounded,
-                              color: P.bone,
-                              size: 38,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// COMMAND PALETTE
-// ═════════════════════════════════════════════════════════════════
-
-class CommandItem {
+  final IconData active;
   final String label;
-  final String description;
-  final IconData icon;
   final Color color;
-  final Future<void> Function() action;
-  const CommandItem({
-    required this.label,
-    required this.description,
+
+  const NavItem({
     required this.icon,
-    required this.color,
-    required this.action,
+    required this.active,
+    required this.label,
+    this.color = Palette.violet,
   });
 }
 
-class CommandPalette extends StatefulWidget {
-  final List<CommandItem> commands;
-  const CommandPalette({super.key, required this.commands});
-
-  @override
-  State<CommandPalette> createState() => _CommandPaletteState();
-}
-
-class _CommandPaletteState extends State<CommandPalette>
-    with SingleTickerProviderStateMixin {
-  final _controller = TextEditingController();
-  final _focus = FocusNode();
-  String _query = '';
-  late AnimationController _entrance;
-
-  @override
-  void initState() {
-    super.initState();
-    _entrance = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 320),
-    )..forward();
-    _controller.addListener(() {
-      setState(() => _query = _controller.text.toLowerCase().trim());
-    });
-    Future.delayed(const Duration(milliseconds: 120), () {
-      if (mounted) _focus.requestFocus();
-    });
-  }
-
-  @override
-  void dispose() {
-    _entrance.dispose();
-    _controller.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  List<CommandItem> get _filtered {
-    if (_query.isEmpty) return widget.commands;
-    return widget.commands.where((c) {
-      return c.label.toLowerCase().contains(_query) ||
-          c.description.toLowerCase().contains(_query);
-    }).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final results = _filtered;
-    final fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
-
-    return Material(
-      color: Colors.transparent,
-      child: FadeTransition(
-        opacity: fade,
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(S.lg),
-            child: Column(
-              children: [
-                Glass(
-                  radius: R.xl,
-                  tint: P.bgElevated.withOpacity(0.95),
-                  borderColor: P.crimson.withOpacity(0.55),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: S.lg, vertical: S.md),
-                  glow: true,
-                  glowColor: P.crimson,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.search_rounded,
-                          color: P.crimson, size: 22),
-                      const SizedBox(width: S.md),
-                      Expanded(
-                        child: TextField(
-                          controller: _controller,
-                          focusNode: _focus,
-                          cursorColor: P.crimson,
-                          style: const TextStyle(
-                            fontFamily: Cfg.bugFont,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w900,
-                            color: P.bone,
-                            letterSpacing: 0.6,
-                          ),
-                          decoration: const InputDecoration(
-                            hintText: 'CARI COMMAND ATAU MENU...',
-                            hintStyle: TextStyle(
-                              fontFamily: Cfg.bugFont,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w900,
-                              color: P.text3,
-                              letterSpacing: 1.2,
-                            ),
-                            border: InputBorder.none,
-                            isCollapsed: true,
-                            contentPadding:
-                                EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                      Tap(
-                        onTap: () => Navigator.of(context).pop(),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: P.surface,
-                            borderRadius: BorderRadius.circular(R.xs),
-                            border: Border.all(color: P.border),
-                          ),
-                          child: const Text(
-                            'ESC',
-                            style: TextStyle(
-                              fontFamily: Cfg.bugFont,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                              color: P.text3,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: S.md),
-                Expanded(
-                  child: results.isEmpty
-                      ? Center(
-                          child: Text(
-                            'Tidak ada hasil untuk "$_query"',
-                            style: const TextStyle(color: P.text3),
-                          ),
-                        )
-                      : ListView.separated(
-                          physics: const BouncingScrollPhysics(),
-                          itemCount: results.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: S.sm),
-                          itemBuilder: (_, i) => _tile(results[i]),
-                        ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _tile(CommandItem cmd) {
-    return Tap(
-      onTap: () async {
-        Navigator.of(context).pop();
-        await Future.delayed(const Duration(milliseconds: 180));
-        await cmd.action();
-      },
-      child: Glass(
-        radius: R.md,
-        tint: P.bgElevated.withOpacity(0.85),
-        borderColor: cmd.color.withOpacity(0.3),
-        padding: const EdgeInsets.all(S.md),
-        child: Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: cmd.color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(R.sm),
-                border: Border.all(color: cmd.color.withOpacity(0.4)),
-              ),
-              child: Icon(cmd.icon, color: cmd.color, size: 20),
-            ),
-            const SizedBox(width: S.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    cmd.label.toUpperCase(),
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone,
-                      letterSpacing: 1.0,
-                      height: 1.0,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    cmd.description,
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 9.5,
-                      color: P.text2,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.keyboard_return_rounded,
-                color: cmd.color.withOpacity(0.6), size: 16),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ═════════════════════════════════════════════════════════════════
-// NAV BAR — HOME | MENU | [RAT] | TOOLS | SETTING
-// Layout: Home - Menu - (RAT center button) - Tools - Setting
+// SPECTRAL COMMAND BAR — REBUILT PREMIUM NAVIGATION
+// Layers:
+// 1. Ambient underglow (color shifts with active index)
+// 2. Glass backdrop with gradient surface
+// 3. Hex pattern overlay (drift animation)
+// 4. Top energy beam (scan + color pulse)
+// 5. Active orb + rotating ring
+// 6. Center hex orb (rotating frame + bolt pulse)
+// 7. Particle burst + shockwave on tap
 // ═════════════════════════════════════════════════════════════════
-
-class NavBar extends StatefulWidget {
+class FloatingGlassNavBar extends StatefulWidget {
   final int index;
   final ValueChanged<int> onTap;
+  final List<NavItem> items;
   final VoidCallback onCenterTap;
-  const NavBar({
+
+  const FloatingGlassNavBar({
     super.key,
     required this.index,
     required this.onTap,
+    required this.items,
     required this.onCenterTap,
   });
 
   @override
-  State<NavBar> createState() => _NavBarState();
+  State<FloatingGlassNavBar> createState() => _FloatingGlassNavBarState();
 }
 
-class _NavBarState extends State<NavBar> with TickerProviderStateMixin {
-  late AnimationController _pulse;
-  late AnimationController _shimmer;
-  late AnimationController _center;
+class _TapBurst {
+  final int index;
+  final Color color;
+  _TapBurst(this.index, this.color);
+}
 
-  // index: 0=HOME, 1=MENU, 2=TOOLS (di kanan center), 3=SETTING
-  static const _items = [
-    _NItem(Icons.home_outlined, Icons.home_rounded, 'HOME', P.violet),
-    _NItem(Icons.grid_view_outlined, Icons.grid_view_rounded, 'MENU',
-        P.blood),
-    _NItem(Icons.build_outlined, Icons.build_rounded, 'TOOLS', P.cyan),
-    _NItem(Icons.settings_outlined, Icons.settings_rounded, 'SETTING',
-        P.teal),
-  ];
+class _FloatingGlassNavBarState extends State<FloatingGlassNavBar>
+    with TickerProviderStateMixin {
+  late AnimationController _bubbleCtrl;
+  late Animation<double> _bubble;
+  late AnimationController _haloCtrl;
+  late AnimationController _ambientCtrl;
+  late AnimationController _hexCtrl;
+  late AnimationController _beamCtrl;
+  late AnimationController _orbCtrl;
+  late AnimationController _burstCtrl;
+  late AnimationController _shockCtrl;
+
+  final List<_TapBurst> _bursts = [];
+  int _lastIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(
+    _lastIndex = widget.index;
+
+    _bubbleCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 480),
+      value: 1,
+    );
+    _bubble = CurvedAnimation(parent: _bubbleCtrl, curve: Curves.easeOutBack);
+
+    _haloCtrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat();
-    _shimmer = AnimationController(
+
+    _ambientCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 5),
+      duration: const Duration(seconds: 6),
     )..repeat();
-    _center = AnimationController(
+
+    _hexCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 18),
+    )..repeat();
+
+    _beamCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat();
+
+    _orbCtrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 8),
     )..repeat();
+
+    _burstCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+
+    _shockCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 520),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant FloatingGlassNavBar old) {
+    super.didUpdateWidget(old);
+    if (old.index != widget.index) {
+      _lastIndex = old.index;
+      _bubbleCtrl.forward(from: 0);
+    }
   }
 
   @override
   void dispose() {
-    _pulse.dispose();
-    _shimmer.dispose();
-    _center.dispose();
+    _bubbleCtrl.dispose();
+    _haloCtrl.dispose();
+    _ambientCtrl.dispose();
+    _hexCtrl.dispose();
+    _beamCtrl.dispose();
+    _orbCtrl.dispose();
+    _burstCtrl.dispose();
+    _shockCtrl.dispose();
     super.dispose();
   }
 
   Color get _activeColor {
-    if (widget.index < 0 || widget.index >= _items.length) {
-      return _items[0].color;
-    }
-    return _items[widget.index].color;
+    if (widget.items.isEmpty) return Palette.violet;
+    final idx = widget.index.clamp(0, widget.items.length - 1);
+    return widget.items[idx].color;
+  }
+
+  void _triggerBurst(int index) {
+    if (widget.items.isEmpty) return;
+    final color = widget.items[index.clamp(0, widget.items.length - 1)].color;
+    setState(() {
+      _bursts.add(_TapBurst(index, color));
+    });
+    _burstCtrl.forward(from: 0).then((_) {
+      if (!mounted) return;
+      setState(() {
+        if (_bursts.isNotEmpty) _bursts.removeAt(0);
+      });
+    });
+    _shockCtrl.forward(from: 0);
   }
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final inset = MediaQuery.paddingOf(context).bottom;
+    final activeColor = _activeColor;
+    final itemCount = widget.items.length;
+    if (itemCount == 0) return const SizedBox.shrink();
+
     return Padding(
       padding: EdgeInsets.fromLTRB(
-          S.lg, 0, S.lg, bottomInset > 0 ? bottomInset - 4 : S.md),
+        Spc.lg,
+        0,
+        Spc.lg,
+        inset > 0 ? inset - 4 : Spc.md,
+      ),
       child: SizedBox(
-        height: 88,
+        height: 116,
         child: Stack(
           clipBehavior: Clip.none,
           alignment: Alignment.bottomCenter,
           children: [
+            // Layer 1: Ambient underglow
+            Positioned(
+              bottom: -22,
+              left: -22,
+              right: -22,
+              child: IgnorePointer(
+                child: RepaintBoundary(
+                  child: AnimatedBuilder(
+                    animation: Listenable.merge([_ambientCtrl, _haloCtrl]),
+                    builder: (_, __) {
+                      final pulse =
+                          0.5 + 0.5 * math.sin(_ambientCtrl.value * math.pi * 2);
+                      final ripple =
+                          0.5 + 0.5 * math.sin(_haloCtrl.value * math.pi * 2);
+                      return Container(
+                        height: 108,
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            colors: [
+                              activeColor.withValues(
+                                alpha: 0.22 + pulse * 0.14,
+                              ),
+                              activeColor.withValues(
+                                alpha: 0.08 + ripple * 0.06,
+                              ),
+                              Colors.transparent,
+                            ],
+                            radius: 1.05,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+
+            // Layer 2 + 3 + 4: Glass container
             Container(
-              height: 76,
+              height: 84,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(R.xxl),
+                borderRadius: BorderRadius.circular(Radii.xl),
                 border: Border.all(
-                  color: _activeColor.withOpacity(0.45),
+                  color: activeColor.withValues(alpha: 0.32),
                   width: 1.4,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: _activeColor.withOpacity(0.35),
-                    blurRadius: 34,
+                    color: activeColor.withValues(alpha: 0.26),
+                    blurRadius: 38,
                     spreadRadius: -8,
                   ),
-                  const BoxShadow(
-                    color: Color(0xD9000000),
-                    blurRadius: 28,
-                    offset: Offset(0, 14),
+                  BoxShadow(
+                    color: Palette.bg0.withValues(alpha: 0.85),
+                    blurRadius: 34,
+                    offset: const Offset(0, 18),
                   ),
                 ],
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(R.xxl),
+                borderRadius: BorderRadius.circular(Radii.xl),
                 child: BackdropFilter(
                   filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                   child: Stack(
                     children: [
+                      // Glass surface
                       Positioned.fill(
-                        child: Container(
+                        child: DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                               colors: [
-                                P.surface.withOpacity(0.96),
-                                P.bgElevated.withOpacity(0.92),
-                                P.surface.withOpacity(0.96),
+                                Palette.surface.withValues(alpha: 0.86),
+                                Palette.surfaceAlt.withValues(alpha: 0.72),
+                                Palette.surface.withValues(alpha: 0.9),
                               ],
+                              stops: const [0.0, 0.5, 1.0],
                             ),
                           ),
                         ),
                       ),
+
+                      // Hex pattern drift
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: RepaintBoundary(
+                            child: AnimatedBuilder(
+                              animation: _hexCtrl,
+                              builder: (_, __) => CustomPaint(
+                                painter: _HexPatternPainter(
+                                  _hexCtrl.value,
+                                  activeColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Top energy beam
                       Positioned(
                         top: 0,
                         left: 0,
                         right: 0,
-                        height: 1.6,
-                        child: IgnorePointer(
-                          child: AnimatedBuilder(
-                            animation: _shimmer,
-                            builder: (_, __) {
-                              final dx = -1 + _shimmer.value * 2;
-                              return Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment(dx - 0.5, 0),
-                                    end: Alignment(dx + 0.5, 0),
-                                    colors: [
-                                      Colors.transparent,
-                                      _activeColor.withOpacity(0.0),
-                                      _activeColor.withOpacity(0.9),
-                                      _activeColor.withOpacity(0.0),
-                                      Colors.transparent,
-                                    ],
-                                    stops: const [0.0, 0.3, 0.5, 0.7, 1.0],
-                                  ),
+                        height: 2,
+                        child: AnimatedBuilder(
+                          animation: _beamCtrl,
+                          builder: (_, __) {
+                            final t = _beamCtrl.value;
+                            final dx = -1.0 + t * 2.0;
+                            return Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment(dx - 0.5, 0),
+                                  end: Alignment(dx + 0.5, 0),
+                                  colors: [
+                                    Colors.transparent,
+                                    activeColor.withValues(alpha: 0.0),
+                                    activeColor,
+                                    activeColor.withValues(alpha: 0.0),
+                                    Colors.transparent,
+                                  ],
+                                  stops: const [0.0, 0.35, 0.5, 0.65, 1.0],
                                 ),
-                              );
-                            },
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+
+                      // Bottom scanline
+                      Positioned(
+                        bottom: 0,
+                        left: 20,
+                        right: 20,
+                        child: Container(
+                          height: 1,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                Colors.transparent,
+                                activeColor.withValues(alpha: 0.5),
+                                activeColor.withValues(alpha: 0.3),
+                                Colors.transparent,
+                              ],
+                              stops: const [0.0, 0.3, 0.7, 1.0],
+                            ),
                           ),
                         ),
                       ),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _NavSlot(
-                              item: _items[0],
-                              active: widget.index == 0,
-                              onTap: () => widget.onTap(0),
-                            ),
-                          ),
-                          Expanded(
-                            child: _NavSlot(
-                              item: _items[1],
-                              active: widget.index == 1,
-                              onTap: () => widget.onTap(1),
-                            ),
-                          ),
-                          const Spacer(),
-                          Expanded(
-                            child: _NavSlot(
-                              item: _items[2],
-                              active: widget.index == 2,
-                              onTap: () => widget.onTap(2),
-                            ),
-                          ),
-                          Expanded(
-                            child: _NavSlot(
-                              item: _items[3],
-                              active: widget.index == 3,
-                              onTap: () => widget.onTap(3),
-                            ),
-                          ),
-                        ],
+
+                      // Nav items row
+                      LayoutBuilder(
+                        builder: (context, cons) {
+                          final gap = 76.0;
+                          final itemW = (cons.maxWidth - gap) / itemCount;
+                          return Stack(
+                            children: [
+                              // Active bubble
+                              AnimatedPositioned(
+                                duration:
+                                    const Duration(milliseconds: 420),
+                                curve: Curves.easeOutCubic,
+                                left: widget.index < itemCount / 2
+                                    ? widget.index * itemW
+                                    : gap + widget.index * itemW,
+                                top: 0,
+                                bottom: 0,
+                                width: itemW,
+                                child: Center(
+                                  child: ScaleTransition(
+                                    scale: _bubble,
+                                    child: _ActiveOrb(
+                                      color: activeColor,
+                                      progress: _bubbleCtrl,
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              // Nav slots
+                              Row(
+                                children: List.generate(
+                                  itemCount,
+                                  (i) {
+                                    final it = widget.items[i];
+                                    final sel = i == widget.index;
+                                    return Expanded(
+                                      child: _NavSlot(
+                                        item: it,
+                                        selected: sel,
+                                        onTap: () {
+                                          HapticFeedback.selectionClick();
+                                          _triggerBurst(i);
+                                          widget.onTap(i);
+                                        },
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+
+                              // Particle burst overlay
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: AnimatedBuilder(
+                                    animation: _burstCtrl,
+                                    builder: (_, __) {
+                                      if (_bursts.isEmpty) {
+                                        return const SizedBox.shrink();
+                                      }
+                                      final burst = _bursts.first;
+                                      final localLeft =
+                                          burst.index < itemCount / 2
+                                              ? burst.index * itemW +
+                                                  itemW / 2
+                                              : gap +
+                                                  burst.index * itemW +
+                                                  itemW / 2;
+                                      return Stack(
+                                        children: [
+                                          Positioned(
+                                            left: localLeft - 60,
+                                            top: 20,
+                                            width: 120,
+                                            height: 60,
+                                            child: CustomPaint(
+                                              painter: _BurstPainter(
+                                                _burstCtrl.value,
+                                                burst.color,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+
+                              // Center gap placeholder
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
+                                child: IgnorePointer(
+                                  child: Center(
+                                    child: SizedBox(width: gap),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),
                 ),
               ),
             ),
-            // RAT center button — SAMA PERSIS kayak sebelumnya
+
+            // Layer 6: Center hex orb
             Positioned(
               top: -28,
-              child: _CenterButton(
-                rotation: _center,
-                onTap: widget.onCenterTap,
+              child: _CenterHexOrb(
+                color: activeColor,
+                rotation: _orbCtrl,
+                shock: _shockCtrl,
+                onTap: () {
+                  HapticFeedback.heavyImpact();
+                  _triggerBurst(0);
+                  widget.onCenterTap();
+                },
               ),
             ),
           ],
@@ -7100,21 +3328,145 @@ class _NavBarState extends State<NavBar> with TickerProviderStateMixin {
   }
 }
 
-class _NItem {
-  final IconData icon;
-  final IconData activeIcon;
-  final String label;
+// ─── Active orb with rotating ring + 3 shadow layers ───────────────
+class _ActiveOrb extends StatelessWidget {
   final Color color;
-  const _NItem(this.icon, this.activeIcon, this.label, this.color);
+  final Animation<double> progress;
+
+  const _ActiveOrb({required this.color, required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 54,
+      height: 54,
+      child: AnimatedBuilder(
+        animation: progress,
+        builder: (_, __) {
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              // Outer glow
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      color.withValues(alpha: 0.28),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+              // Rotating dashed ring
+              Transform.rotate(
+                angle: progress.value * math.pi * 2,
+                child: CustomPaint(
+                  size: const Size(48, 48),
+                  painter: _DashedRingPainter(color),
+                ),
+              ),
+              // Solid core
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      color,
+                      Color.lerp(color, Palette.violetDeep, 0.55)!,
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.75),
+                      blurRadius: 22,
+                      spreadRadius: 1,
+                    ),
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.42),
+                      blurRadius: 40,
+                      spreadRadius: 4,
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+              ),
+              // Inner highlight
+              Container(
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.white.withValues(alpha: 0.65),
+                      Colors.white.withValues(alpha: 0.05),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
+class _DashedRingPainter extends CustomPainter {
+  final Color color;
+  _DashedRingPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - 2;
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.85)
+      ..strokeWidth = 1.6
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    const segments = 12;
+    for (int i = 0; i < segments; i++) {
+      final startAngle = (i / segments) * math.pi * 2;
+      final sweep = (math.pi * 2 / segments) * 0.55;
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        startAngle,
+        sweep,
+        false,
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedRingPainter old) =>
+      old.color != color;
+}
+
+// ─── Nav slot with multi-layer effects ─────────────────────────────
 class _NavSlot extends StatefulWidget {
-  final _NItem item;
-  final bool active;
+  final NavItem item;
+  final bool selected;
   final VoidCallback onTap;
+
   const _NavSlot({
     required this.item,
-    required this.active,
+    required this.selected,
     required this.onTap,
   });
 
@@ -7127,6 +3479,8 @@ class _NavSlotState extends State<_NavSlot> {
 
   @override
   Widget build(BuildContext context) {
+    final sel = widget.selected;
+    final color = widget.item.color;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapDown: (_) => setState(() => _pressed = true),
@@ -7134,44 +3488,70 @@ class _NavSlotState extends State<_NavSlot> {
       onTapCancel: () => setState(() => _pressed = false),
       onTap: widget.onTap,
       child: AnimatedScale(
-        scale: _pressed ? 0.88 : 1.0,
-        duration: T.fast,
+        scale: _pressed ? 0.9 : 1.0,
+        duration: Timings.fast,
+        curve: Curves.easeOut,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            AnimatedContainer(
-              duration: T.normal,
-              curve: Curves.easeOutCubic,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: S.md, vertical: 5),
-              decoration: BoxDecoration(
-                gradient: widget.active
-                    ? LinearGradient(
-                        colors: [
-                          widget.item.color.withOpacity(0.3),
-                          widget.item.color.withOpacity(0.08),
-                        ],
-                      )
-                    : null,
-                borderRadius: BorderRadius.circular(R.sm),
-              ),
-              child: Icon(
-                widget.active ? widget.item.activeIcon : widget.item.icon,
-                size: 22,
-                color: widget.active ? widget.item.color : P.text4,
+            SizedBox(
+              height: 28,
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 320),
+                    transitionBuilder: (child, anim) {
+                      return ScaleTransition(
+                        scale: Tween<double>(begin: 0.5, end: 1.0).animate(
+                          CurvedAnimation(
+                            parent: anim,
+                            curve: Curves.easeOutBack,
+                          ),
+                        ),
+                        child: FadeTransition(opacity: anim, child: child),
+                      );
+                    },
+                    child: Icon(
+                      sel ? widget.item.active : widget.item.icon,
+                      key: ValueKey('${widget.item.label}-$sel'),
+                      size: 22,
+                      color: sel ? Colors.white : Palette.text3,
+                    ),
+                  ),
+                  if (sel)
+                    Positioned(
+                      bottom: -1,
+                      child: Container(
+                        width: 22,
+                        height: 3,
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: color.withValues(alpha: 0.9),
+                              blurRadius: 10,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-            const SizedBox(height: 3),
-            Text(
-              widget.item.label,
+            const SizedBox(height: 5),
+            AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 260),
               style: TextStyle(
-                fontFamily: Cfg.bugFont,
-                fontSize: 8,
+                fontFamily: AppConfig.fontBug,
+                fontSize: sel ? 9.5 : 9,
                 fontWeight: FontWeight.w900,
-                color: widget.active ? widget.item.color : P.text5,
+                color: sel ? Colors.white : Palette.text3,
                 letterSpacing: 1.1,
-                height: 1.0,
               ),
+              child: Text(widget.item.label.toUpperCase()),
             ),
           ],
         ),
@@ -7180,31 +3560,52 @@ class _NavSlotState extends State<_NavSlot> {
   }
 }
 
-// Center button = RAT (icon remote + hexagon frame + efek — sama persis seperti sebelumnya)
-class _CenterButton extends StatelessWidget {
+// ─── Center hex orb with rotating frame ────────────────────────────
+class _CenterHexOrb extends StatelessWidget {
+  final Color color;
   final Animation<double> rotation;
+  final Animation<double> shock;
   final VoidCallback onTap;
-  const _CenterButton({required this.rotation, required this.onTap});
+
+  const _CenterHexOrb({
+    required this.color,
+    required this.rotation,
+    required this.shock,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        HapticFeedback.mediumImpact();
-        onTap();
-      },
+      onTap: onTap,
       child: RepaintBoundary(
         child: AnimatedBuilder(
-          animation: rotation,
+          animation: Listenable.merge([rotation, shock]),
           builder: (_, __) {
-            final pulse =
-                0.5 + 0.5 * math.sin(rotation.value * math.pi * 2);
+            final pulse = 0.5 + 0.5 * math.sin(rotation.value * math.pi * 2);
+            final shockScale = 1.0 + shock.value * 0.7;
+            final shockAlpha = (1.0 - shock.value) * 0.5;
+
             return SizedBox(
-              width: 112,
-              height: 112,
+              width: 118,
+              height: 118,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
+                  // Shockwave ring on tap
+                  if (shock.value > 0)
+                    Container(
+                      width: 76 * shockScale,
+                      height: 76 * shockScale,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: color.withValues(alpha: shockAlpha),
+                          width: 2.5,
+                        ),
+                      ),
+                    ),
+                  // Ambient halo
                   Container(
                     width: 82 + pulse * 10,
                     height: 82 + pulse * 10,
@@ -7212,54 +3613,63 @@ class _CenterButton extends StatelessWidget {
                       shape: BoxShape.circle,
                       gradient: RadialGradient(
                         colors: [
-                          P.crimson.withOpacity(0.5 * pulse + 0.2),
+                          color.withValues(alpha: 0.42 * pulse + 0.18),
                           Colors.transparent,
                         ],
                       ),
                     ),
                   ),
+                  // Rotating hex frame
                   Transform.rotate(
                     angle: rotation.value * math.pi * 2,
                     child: CustomPaint(
                       size: const Size(84, 84),
-                      painter: _HexFramePainter(P.crimson),
+                      painter: _HexFramePainter(color),
                     ),
                   ),
+                  // Inner rotating counter
                   Transform.rotate(
                     angle: -rotation.value * math.pi * 4,
                     child: CustomPaint(
-                      size: const Size(68, 68),
+                      size: const Size(66, 66),
                       painter: _HexFramePainter(
-                        P.violet.withOpacity(0.55),
+                        color.withValues(alpha: 0.6),
                       ),
                     ),
                   ),
+                  // Core orb
                   Container(
-                    width: 64,
-                    height: 64,
+                    width: 62,
+                    height: 62,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       gradient: const LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [P.crimson, P.blood, P.violetDeep],
+                        colors: [
+                          Palette.cyan,
+                          Palette.violet,
+                          Palette.plasma,
+                        ],
                         stops: [0.0, 0.55, 1.0],
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: P.crimson.withOpacity(0.75 + pulse * 0.2),
-                          blurRadius: 36,
+                          color: Palette.cyan.withValues(
+                            alpha: 0.65 + pulse * 0.2,
+                          ),
+                          blurRadius: 30,
                           spreadRadius: 2,
                         ),
                         BoxShadow(
-                          color: P.bloodBright.withOpacity(0.55),
-                          blurRadius: 52,
+                          color: Palette.plasma.withValues(alpha: 0.55),
+                          blurRadius: 44,
                           spreadRadius: 5,
                         ),
-                        const BoxShadow(
-                          color: Color(0xB3000000),
-                          blurRadius: 20,
-                          offset: Offset(0, 6),
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.65),
+                          blurRadius: 16,
+                          offset: const Offset(0, 6),
                         ),
                       ],
                     ),
@@ -7268,13 +3678,16 @@ class _CenterButton extends StatelessWidget {
                       decoration: const BoxDecoration(
                         shape: BoxShape.circle,
                         gradient: RadialGradient(
-                          colors: [Color(0xFF2A0A0A), Color(0xFF05030A)],
+                          colors: [
+                            Color(0xFF2A1A5A),
+                            Color(0xFF0A0520),
+                          ],
                         ),
                       ),
                       child: const Center(
                         child: Icon(
-                          Icons.settings_remote_rounded,
-                          color: P.bone,
+                          Icons.bolt_rounded,
+                          color: Colors.white,
                           size: 30,
                         ),
                       ),
@@ -7317,6 +3730,7 @@ class _HexFramePainter extends CustomPainter {
     }
     canvas.drawPath(path, paint);
 
+    // Corner glow dots
     for (int i = 0; i < 6; i++) {
       final angle = (i / 6) * math.pi * 2 - math.pi / 2;
       final x = center.dx + math.cos(angle) * radius;
@@ -7335,1039 +3749,2033 @@ class _HexFramePainter extends CustomPainter {
   bool shouldRepaint(covariant _HexFramePainter old) => old.color != color;
 }
 
-// ═════════════════════════════════════════════════════════════════
-// ACCENT PICKER SHEET
-// ═════════════════════════════════════════════════════════════════
+// ─── Hex pattern painter (nav background drift) ────────────────────
+class _HexPatternPainter extends CustomPainter {
+  final double t;
+  final Color color;
+  _HexPatternPainter(this.t, this.color);
 
-class AccentPickerSheet extends StatelessWidget {
-  const AccentPickerSheet({super.key});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.05)
+      ..strokeWidth = 0.7
+      ..style = PaintingStyle.stroke;
+
+    const hexSize = 14.0;
+    final driftX = (t * 30) % (hexSize * 3);
+    final driftY = (t * 20) % (hexSize * 1.75);
+
+    for (double y = -hexSize; y < size.height + hexSize; y += hexSize * 1.75) {
+      for (double x = -hexSize; x < size.width + hexSize; x += hexSize * 3) {
+        final offsetX = ((y / (hexSize * 1.75)).round().isEven)
+            ? 0
+            : hexSize * 1.5;
+        final cx = x + offsetX + driftX;
+        final cy = y + driftY;
+        _drawHex(canvas, Offset(cx, cy), hexSize, paint);
+      }
+    }
+  }
+
+  void _drawHex(Canvas canvas, Offset center, double r, Paint paint) {
+    final path = Path();
+    for (int i = 0; i <= 6; i++) {
+      final angle = (i / 6) * math.pi * 2;
+      final x = center.dx + math.cos(angle) * r;
+      final y = center.dy + math.sin(angle) * r;
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _HexPatternPainter old) =>
+      old.t != t || old.color != color;
+}
+
+// ─── Tap burst particles ───────────────────────────────────────────
+class _BurstPainter extends CustomPainter {
+  final double t;
+  final Color color;
+  _BurstPainter(this.t, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final paint = Paint();
+    for (int i = 0; i < 10; i++) {
+      final angle = (i / 10) * math.pi * 2;
+      final dist = t * 48 + 4;
+      final x = center.dx + math.cos(angle) * dist;
+      final y = center.dy + math.sin(angle) * dist;
+      final alpha = (1 - t).clamp(0.0, 1.0);
+      final r = (1 - t) * 2.4 + 0.8;
+      paint.color = color.withValues(alpha: alpha * 0.9);
+      canvas.drawCircle(Offset(x, y), r, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BurstPainter old) =>
+      old.t != t || old.color != color;
+}
+
+// ═════════════════════════════════════════════════════════════════
+// CHIBI COMPANION
+// ═════════════════════════════════════════════════════════════════
+enum ChibiMood { happy, sleepy, excited, focused, curious }
+enum ChibiState { idle, dragging, dismissed }
+
+class ChibiCompanion extends StatefulWidget {
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final Offset initialPosition;
+  final Size screenSize;
+  final bool isDay;
+  final bool isOnline;
+
+  const ChibiCompanion({
+    super.key,
+    required this.onTap,
+    required this.initialPosition,
+    required this.screenSize,
+    this.onLongPress,
+    this.isDay = true,
+    this.isOnline = true,
+  });
+
+  @override
+  State<ChibiCompanion> createState() => _ChibiCompanionState();
+}
+
+class _ChibiCompanionState extends State<ChibiCompanion>
+    with TickerProviderStateMixin {
+  ChibiState _state = ChibiState.idle;
+  ChibiMood _mood = ChibiMood.happy;
+  late Offset _position;
+  late Offset _dragStart;
+  late Offset _positionAtDragStart;
+  Timer? _speechTimer;
+  Timer? _moodTimer;
+  String? _speech;
+  bool _speechVisible = false;
+
+  late AnimationController _floatController;
+  late AnimationController _pulseController;
+  late AnimationController _fadeController;
+  late AnimationController _snapController;
+  late AnimationController _speechController;
+  late AnimationController _particleController;
+  late Animation<double> _speechAnim;
+  late Animation<Offset> _snapAnimation;
+
+  static const double _chibiSize = 100;
+  static const double _dropZoneRadius = 56;
+
+  static const _speechHappy = <String>[
+    'HALO! KETUK AKU YA',
+    'MAU NGAPAIN HARI INI?',
+    'SEMANGAT YA!',
+    'AKU DI SINI KALAU BUTUH',
+    'JANGAN LUPA ISTIRAHAT',
+    'MINUM AIR DULU YUK',
+  ];
+  static const _speechSleepy = <String>[
+    'HMM... NGANTUK NIH',
+    'Zzz... jangan ganggu',
+    'MALEM INI DINGIN YA',
+    'AKU TIDUR SEBENTAR',
+  ];
+  static const _speechExcited = <String>[
+    'WOW KEREN!',
+    'AYO MULAI!',
+    'AKU SIAP MEMBANTU!',
+    'GAS GAS GAS!',
+  ];
+  static const _speechFocused = <String>[
+    'SEDANG FOKUS...',
+    'MOHON JANGAN DIGANGGU',
+    'LAGI MIKIR NIH',
+  ];
+  static const _speechCurious = <String>[
+    'ITU APA?',
+    'HMM MENARIK...',
+    'COBA KLIK AKU',
+    'ADA YANG BARU?',
+  ];
+
+  bool get _isDismissed => _state == ChibiState.dismissed;
+
+  @override
+  void initState() {
+    super.initState();
+    _position = widget.initialPosition;
+    _dragStart = Offset.zero;
+    _positionAtDragStart = _position;
+    _mood = widget.isDay ? ChibiMood.happy : ChibiMood.sleepy;
+
+    _floatController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+      value: 1,
+    );
+
+    _snapController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    _snapAnimation = Tween<Offset>(
+      begin: _position,
+      end: _position,
+    ).animate(
+      CurvedAnimation(
+        parent: _snapController,
+        curve: Curves.easeOutBack,
+      ),
+    );
+    _snapController.addListener(_snapListener);
+
+    _speechController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+    _speechAnim = CurvedAnimation(
+      parent: _speechController,
+      curve: Curves.easeOutBack,
+    );
+
+    _particleController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 6),
+    )..repeat();
+
+    _scheduleSpeech();
+    _scheduleMoodChange();
+  }
+
+  void _scheduleSpeech() {
+    _speechTimer?.cancel();
+    _speechTimer = Timer.periodic(const Duration(seconds: 14), (_) {
+      if (!mounted || _isDismissed || _state == ChibiState.dragging) return;
+      _showRandomSpeech();
+    });
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && !_isDismissed) _showRandomSpeech();
+    });
+  }
+
+  void _scheduleMoodChange() {
+    _moodTimer?.cancel();
+    _moodTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (!mounted || _isDismissed) return;
+      _autoMood();
+    });
+  }
+
+  void _autoMood() {
+    if (!widget.isOnline) {
+      setState(() => _mood = ChibiMood.sleepy);
+      return;
+    }
+    if (!widget.isDay) {
+      setState(() => _mood = ChibiMood.sleepy);
+      return;
+    }
+    final r = math.Random().nextInt(4);
+    setState(() {
+      _mood = ChibiMood.values[r == 0 ? 0 : r == 1 ? 2 : r == 2 ? 3 : 4];
+    });
+  }
+
+  void _showRandomSpeech() {
+    final list = switch (_mood) {
+      ChibiMood.happy => _speechHappy,
+      ChibiMood.sleepy => _speechSleepy,
+      ChibiMood.excited => _speechExcited,
+      ChibiMood.focused => _speechFocused,
+      ChibiMood.curious => _speechCurious,
+    };
+    final text = list[math.Random().nextInt(list.length)];
+    setState(() {
+      _speech = text;
+      _speechVisible = true;
+    });
+    _speechController.forward(from: 0);
+    Future.delayed(const Duration(seconds: 6), () {
+      if (!mounted) return;
+      _speechController.reverse().then((_) {
+        if (mounted) setState(() => _speechVisible = false);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _speechTimer?.cancel();
+    _moodTimer?.cancel();
+    _snapController.removeListener(_snapListener);
+    _floatController.dispose();
+    _pulseController.dispose();
+    _fadeController.dispose();
+    _snapController.dispose();
+    _speechController.dispose();
+    _particleController.dispose();
+    super.dispose();
+  }
+
+  Offset get _dropZoneCenter => Offset(
+        widget.screenSize.width / 2,
+        widget.screenSize.height - 200,
+      );
+
+  bool _isOverDropZone(Offset pos) {
+    final centerOfChibi =
+        pos + const Offset(_chibiSize / 2, _chibiSize / 2);
+    final dist = (centerOfChibi - _dropZoneCenter).distance;
+    return dist < _dropZoneRadius + 30;
+  }
+
+  void _onPanStart(DragStartDetails d) {
+    if (_isDismissed) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _state = ChibiState.dragging;
+      _dragStart = d.globalPosition;
+      _positionAtDragStart = _position;
+    });
+    _floatController.stop();
+    if (_speechVisible) {
+      _speechController.reverse();
+      setState(() => _speechVisible = false);
+    }
+  }
+
+  void _onPanUpdate(DragUpdateDetails d) {
+    if (_isDismissed) return;
+    final delta = d.globalPosition - _dragStart;
+    var newPos = _positionAtDragStart + delta;
+    newPos = Offset(
+      newPos.dx.clamp(0, widget.screenSize.width - _chibiSize),
+      newPos.dy.clamp(0, widget.screenSize.height - _chibiSize),
+    );
+    setState(() => _position = newPos);
+  }
+
+  void _onPanEnd(DragEndDetails d) {
+    if (_isDismissed) return;
+    if (_isOverDropZone(_position)) {
+      _dismiss();
+    } else {
+      _snapBack();
+    }
+  }
+
+  void _snapBack() {
+    if (_snapController.isAnimating) return;
+    _snapAnimation = Tween<Offset>(
+      begin: _position,
+      end: widget.initialPosition,
+    ).animate(
+      CurvedAnimation(
+        parent: _snapController,
+        curve: Curves.easeOutBack,
+      ),
+    );
+    _snapController.forward(from: 0).then((_) {
+      if (!mounted) return;
+      setState(() {
+        _position = widget.initialPosition;
+        _state = ChibiState.idle;
+      });
+      _floatController.repeat(reverse: true);
+    });
+  }
+
+  void _snapListener() {
+    if (!mounted) return;
+    if (!_snapController.isAnimating) return;
+    setState(() => _position = _snapAnimation.value);
+  }
+
+  void _dismiss() {
+    HapticFeedback.mediumImpact();
+    _fadeController.reverse().then((_) {
+      if (!mounted) return;
+      setState(() => _state = ChibiState.dismissed);
+    });
+  }
+
+  void _handleTap() {
+    if (_isDismissed || _state == ChibiState.dragging) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _mood = ChibiMood.excited;
+    });
+    widget.onTap();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      _autoMood();
+    });
+  }
+
+  void _handleDoubleTap() {
+    if (_isDismissed || _state == ChibiState.dragging) return;
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _mood =
+          ChibiMood.values[math.Random().nextInt(ChibiMood.values.length)];
+    });
+    _showRandomSpeech();
+  }
+
+  void _handleLongPress() {
+    if (_isDismissed || _state == ChibiState.dragging) return;
+    HapticFeedback.heavyImpact();
+    widget.onLongPress?.call();
+  }
+
+  Color get _moodColor {
+    switch (_mood) {
+      case ChibiMood.happy:
+        return Palette.mint;
+      case ChibiMood.sleepy:
+        return Palette.violet;
+      case ChibiMood.excited:
+        return Palette.amber;
+      case ChibiMood.focused:
+        return Palette.cyan;
+      case ChibiMood.curious:
+        return Palette.pink;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(S.lg),
-        child: Glass(
-          radius: R.xxl,
-          tint: P.surface.withOpacity(0.97),
-          borderColor: P.borderBright.withOpacity(0.6),
-          padding: const EdgeInsets.all(S.xl),
-          glow: true,
-          glowColor: P.violet,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.palette_rounded,
-                      color: P.violet, size: 22),
-                  const SizedBox(width: S.sm),
-                  const Text(
-                    'WARNA AKSEN',
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone,
-                      letterSpacing: 2.0,
-                    ),
-                  ),
-                  const Spacer(),
-                  ValueListenableBuilder<Color>(
-                    valueListenable: accentNotifier,
-                    builder: (_, current, __) => Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: current.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(R.pill),
-                        border:
-                            Border.all(color: current.withOpacity(0.55)),
-                      ),
-                      child: Text(
-                        AccentPresets.labelOf(current),
-                        style: TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          color: current,
-                          letterSpacing: 1.4,
+    if (_isDismissed) return const SizedBox.shrink();
+
+    final isDragging = _state == ChibiState.dragging;
+    final overDrop = isDragging && _isOverDropZone(_position);
+
+    return Stack(
+      children: [
+        if (isDragging)
+          Positioned(
+            left: _dropZoneCenter.dx - _dropZoneRadius,
+            top: _dropZoneCenter.dy - _dropZoneRadius,
+            child: _DropZone(active: overDrop, radius: _dropZoneRadius),
+          ),
+        AnimatedBuilder(
+          animation: Listenable.merge([
+            _floatController,
+            _snapController,
+            _fadeController,
+            _pulseController,
+            _particleController,
+          ]),
+          builder: (_, __) {
+            double floatOffset = 0;
+            if (_state == ChibiState.idle) {
+              floatOffset =
+                  math.sin(_floatController.value * math.pi * 2) * 6;
+            }
+
+            return Positioned(
+              left: _position.dx,
+              top: _position.dy + floatOffset,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _handleTap,
+                onDoubleTap: _handleDoubleTap,
+                onLongPress: _handleLongPress,
+                onPanStart: _onPanStart,
+                onPanUpdate: _onPanUpdate,
+                onPanEnd: _onPanEnd,
+                child: FadeTransition(
+                  opacity: _fadeController,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_speechVisible && _speech != null)
+                        ScaleTransition(
+                          scale: _speechAnim,
+                          alignment: Alignment.bottomCenter,
+                          child: _SpeechBubble(text: _speech!),
                         ),
+                      const SizedBox(height: 4),
+                      _ChibiBody(
+                        isDragging: isDragging,
+                        overDrop: overDrop,
+                        pulse: _pulseController.value,
+                        size: _chibiSize,
+                        moodColor: _moodColor,
+                        particles: _particleController.value,
+                        mood: _mood,
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
-              const SizedBox(height: S.lg),
-              const Text(
-                'Pilih warna aksen untuk seluruh aplikasi.',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 10.5,
-                  color: P.text2,
-                  height: 1.45,
                 ),
               ),
-              const SizedBox(height: S.xl),
-              Row(
-                children: AccentPresets.all.entries.map((entry) {
-                  return Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: _option(context, entry.key, entry.value),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _SpeechBubble extends StatelessWidget {
+  final String text;
+  const _SpeechBubble({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Palette.surface.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Palette.cyan.withValues(alpha: 0.55),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Palette.cyan.withValues(alpha: 0.3),
+            blurRadius: 18,
           ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontFamily: AppConfig.fontBug,
+          fontSize: 9.5,
+          fontWeight: FontWeight.w900,
+          color: Palette.text,
+          letterSpacing: 1.0,
+          height: 1.35,
         ),
       ),
     );
   }
+}
 
-  Widget _option(BuildContext context, String label, Color color) {
-    return ValueListenableBuilder<Color>(
-      valueListenable: accentNotifier,
-      builder: (_, current, __) {
-        final active = current == color;
-        return Tap(
-          onTap: () {
-            accentNotifier.value = color;
-            Navigator.of(context).pop();
-          },
-          child: AnimatedContainer(
-            duration: T.normal,
-            padding: const EdgeInsets.symmetric(
-                horizontal: S.sm, vertical: S.md),
+class _ChibiBody extends StatelessWidget {
+  final bool isDragging;
+  final bool overDrop;
+  final double pulse;
+  final double size;
+  final Color moodColor;
+  final double particles;
+  final ChibiMood mood;
+
+  const _ChibiBody({
+    required this.isDragging,
+    required this.overDrop,
+    required this.pulse,
+    required this.size,
+    required this.moodColor,
+    required this.particles,
+    required this.mood,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final asset =
+        isDragging ? AppConfig.assetChibiDrag : AppConfig.assetChibiIdle;
+    final label = isDragging ? 'LEPAS DI X' : 'TAP AKU';
+    final labelColor = overDrop
+        ? Palette.coral
+        : isDragging
+            ? Palette.amber
+            : moodColor;
+
+    final glowAmount = 0.35 + math.sin(pulse * math.pi * 2) * 0.2;
+    final glowColor = overDrop ? Palette.coral : moodColor;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: Palette.surface.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(Radii.pill),
+            border: Border.all(color: labelColor, width: 1.3),
+            boxShadow: [
+              BoxShadow(
+                color: labelColor.withValues(alpha: 0.5),
+                blurRadius: 12,
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 8.5,
+              fontWeight: FontWeight.w900,
+              color: labelColor,
+              letterSpacing: 1.4,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        SizedBox(
+          width: size + 20,
+          height: size + 20,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _ChibiParticlesPainter(particles, moodColor),
+                ),
+              ),
+              Container(
+                width: size,
+                height: size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: glowColor.withValues(alpha: glowAmount),
+                      blurRadius: 26,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _ChibiRingPainter(
+                          pulse,
+                          glowColor,
+                          isDragging,
+                        ),
+                      ),
+                    ),
+                    Image.asset(
+                      asset,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => _ChibiFallback(
+                        isDragging: isDragging,
+                        color: glowColor,
+                        mood: mood,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChibiParticlesPainter extends CustomPainter {
+  final double t;
+  final Color color;
+  _ChibiParticlesPainter(this.t, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final paint = Paint();
+    for (int i = 0; i < 6; i++) {
+      final phase = (t + i / 6.0) % 1.0;
+      final angle = i * math.pi / 3 + t * math.pi * 2;
+      final r = size.width * 0.42 + math.sin(phase * math.pi * 2) * 6;
+      final x = center.dx + math.cos(angle) * r;
+      final y = center.dy + math.sin(angle) * r;
+      final alpha = (1 - phase) * 0.55;
+      final radius = 1.5 + math.sin(phase * math.pi) * 1.5;
+      paint.color = color.withValues(alpha: alpha);
+      canvas.drawCircle(Offset(x, y), radius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChibiParticlesPainter old) =>
+      old.t != t || old.color != color;
+}
+
+class _ChibiFallback extends StatelessWidget {
+  final bool isDragging;
+  final Color color;
+  final ChibiMood mood;
+
+  const _ChibiFallback({
+    required this.isDragging,
+    required this.color,
+    required this.mood,
+  });
+
+  IconData get _moodIcon {
+    if (isDragging) return Icons.pets_rounded;
+    switch (mood) {
+      case ChibiMood.happy:
+        return Icons.sentiment_very_satisfied_rounded;
+      case ChibiMood.sleepy:
+        return Icons.bedtime_rounded;
+      case ChibiMood.excited:
+        return Icons.emoji_emotions_rounded;
+      case ChibiMood.focused:
+        return Icons.psychology_rounded;
+      case ChibiMood.curious:
+        return Icons.help_center_rounded;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            color.withValues(alpha: 0.6),
+            color.withValues(alpha: 0.15),
+          ],
+        ),
+        border: Border.all(color: color, width: 1.6),
+      ),
+      child: Center(
+        child: Icon(_moodIcon, size: 44, color: Colors.white),
+      ),
+    );
+  }
+}
+
+class _ChibiRingPainter extends CustomPainter {
+  final double t;
+  final Color color;
+  final bool isDragging;
+
+  _ChibiRingPainter(this.t, this.color, this.isDragging);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final baseR = size.width / 2;
+
+    for (int i = 0; i < 2; i++) {
+      final local = (t + i * 0.5) % 1.0;
+      final r = baseR - 4 + local * 12;
+      final alpha = (1 - local) * (isDragging ? 0.7 : 0.45);
+      canvas.drawCircle(
+        center,
+        r,
+        Paint()
+          ..color = color.withValues(alpha: alpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+    }
+
+    canvas.drawCircle(
+      center,
+      baseR - 6,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            color.withValues(alpha: 0.0),
+            color.withValues(alpha: 0.18),
+          ],
+        ).createShader(Rect.fromCircle(center: center, radius: baseR)),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChibiRingPainter old) =>
+      old.t != t || old.color != color || old.isDragging != isDragging;
+}
+
+class _DropZone extends StatefulWidget {
+  final bool active;
+  final double radius;
+
+  const _DropZone({required this.active, required this.radius});
+
+  @override
+  State<_DropZone> createState() => _DropZoneState();
+}
+
+class _DropZoneState extends State<_DropZone>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.active ? Palette.coral : Palette.text3;
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (_, __) {
+          final pulse = widget.active ? _c.value : 0.0;
+          return SizedBox(
+            width: widget.radius * 2,
+            height: widget.radius * 2,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  width: widget.radius * 2 * (0.9 + pulse * 0.15),
+                  height: widget.radius * 2 * (0.9 + pulse * 0.15),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color.withValues(alpha: 0.10),
+                    border: Border.all(
+                      color: color.withValues(alpha: 0.6),
+                      width: 1.6,
+                    ),
+                    boxShadow: widget.active
+                        ? [
+                            BoxShadow(
+                              color: color.withValues(alpha: 0.4),
+                              blurRadius: 24,
+                            ),
+                          ]
+                        : null,
+                  ),
+                ),
+                Icon(Icons.close_rounded, color: color, size: 28),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class UserInfoPanel extends StatelessWidget {
+  final AppUser user;
+  final String status;
+
+  const UserInfoPanel({
+    super.key,
+    required this.user,
+    required this.status,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final days = user.daysUntilExpiry;
+    final expiryColor = user.expiryColor;
+    final roleColor = user.isOwner
+        ? Palette.pink
+        : user.isAdmin
+            ? Palette.violet
+            : user.isVip
+                ? Palette.amber
+                : Palette.text3;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(Radii.xl),
+      child: SizedBox(
+        height: 340,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Image.asset(
+                AppConfig.assetPage,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Palette.violetDeep.withValues(alpha: 0.6),
+                        Palette.pink.withValues(alpha: 0.4),
+                        Palette.bg2,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Palette.bg0.withValues(alpha: 0.55),
+                      Palette.bg0.withValues(alpha: 0.75),
+                      Palette.bg0.withValues(alpha: 0.95),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  painter: _UserPanelDecorPainter(roleColor),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(Spc.lg),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Palette.bg0.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(Radii.xs),
+                          border: Border.all(
+                            color: roleColor.withValues(alpha: 0.5),
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.person_rounded,
+                              color: roleColor,
+                              size: 10,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'PROFIL PENGGUNA',
+                              style: TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w900,
+                                color: roleColor,
+                                letterSpacing: 1.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Palette.bg0.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(Radii.xs),
+                          border: Border.all(
+                            color: (status == 'ONLINE'
+                                    ? Palette.mint
+                                    : Palette.coral)
+                                .withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            HaloDot(
+                              color: status == 'ONLINE'
+                                  ? Palette.mint
+                                  : Palette.coral,
+                              size: 3,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              status,
+                              style: TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w900,
+                                color: status == 'ONLINE'
+                                    ? Palette.mint
+                                    : Palette.coral,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: Spc.lg),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Stack(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(3),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [roleColor, Palette.bg0],
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: roleColor.withValues(alpha: 0.6),
+                                  blurRadius: 22,
+                                ),
+                              ],
+                            ),
+                            child: Container(
+                              width: 88,
+                              height: 88,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Palette.surface,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  user.initial,
+                                  style: TextStyle(
+                                    fontFamily: AppConfig.fontBug,
+                                    fontSize: 40,
+                                    fontWeight: FontWeight.w900,
+                                    color: roleColor,
+                                    letterSpacing: 1.0,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 2,
+                            bottom: 2,
+                            child: Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                color: user.isActive
+                                    ? Palette.mint
+                                    : Palette.coral,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Palette.bg0,
+                                  width: 3,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: Spc.lg),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user.username.toUpperCase(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                                color: Palette.text,
+                                letterSpacing: 0.4,
+                                height: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                RoleChip(role: user.role, fontSize: 9.5),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 7,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        Palette.bg0.withValues(alpha: 0.6),
+                                    borderRadius:
+                                        BorderRadius.circular(Radii.pill),
+                                    border: Border.all(
+                                      color: Palette.borderSoft,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'ID #${user.id}',
+                                    style: const TextStyle(
+                                      fontFamily: AppConfig.fontBug,
+                                      fontSize: 8.5,
+                                      fontWeight: FontWeight.w900,
+                                      color: Palette.text2,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: Spc.md),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Spc.md,
+                                vertical: Spc.sm,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Palette.bg0.withValues(alpha: 0.55),
+                                borderRadius:
+                                    BorderRadius.circular(Radii.sm),
+                                border: Border.all(
+                                  color: Palette.borderSoft,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.access_time_rounded,
+                                    color: Palette.text3,
+                                    size: 12,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  const Text(
+                                    'DIBUAT',
+                                    style: TextStyle(
+                                      fontFamily: AppConfig.fontBug,
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.w900,
+                                      color: Palette.text3,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Text(
+                                    user.createdAt,
+                                    style: const TextStyle(
+                                      fontFamily: AppConfig.fontBug,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      color: Palette.text,
+                                      letterSpacing: 0.6,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.all(Spc.md),
+                    decoration: BoxDecoration(
+                      color: Palette.bg0.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(Radii.md),
+                      border: Border.all(
+                        color: expiryColor.withValues(alpha: 0.4),
+                        width: 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: expiryColor.withValues(alpha: 0.15),
+                          blurRadius: 16,
+                          spreadRadius: -4,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: expiryColor.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(Radii.sm),
+                            border: Border.all(
+                              color: expiryColor.withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.event_available_rounded,
+                            color: expiryColor,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: Spc.md),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Text(
+                                    'EXPIRED PADA',
+                                    style: TextStyle(
+                                      fontFamily: AppConfig.fontBug,
+                                      fontSize: 8.5,
+                                      fontWeight: FontWeight.w900,
+                                      color: Palette.text3,
+                                      letterSpacing: 1.4,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Container(
+                                      height: 1,
+                                      color: Palette.borderSoft,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Text(
+                                    user.expired,
+                                    style: TextStyle(
+                                      fontFamily: AppConfig.fontBug,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w900,
+                                      color: expiryColor,
+                                      letterSpacing: 1.0,
+                                    ),
+                                  ),
+                                  const SizedBox(width: Spc.sm),
+                                  if (days != null)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: expiryColor
+                                            .withValues(alpha: 0.16),
+                                        borderRadius:
+                                            BorderRadius.circular(Radii.xs),
+                                        border: Border.all(
+                                          color: expiryColor
+                                              .withValues(alpha: 0.4),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        days < 0 ? 'LEWAT' : '$days HARI',
+                                        style: TextStyle(
+                                          fontFamily: AppConfig.fontBug,
+                                          fontSize: 8.5,
+                                          fontWeight: FontWeight.w900,
+                                          color: expiryColor,
+                                          letterSpacing: 1.0,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                user.expiryStatus,
+                                style: const TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: Palette.text3,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UserPanelDecorPainter extends CustomPainter {
+  final Color accent;
+  _UserPanelDecorPainter(this.accent);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = accent.withValues(alpha: 0.08)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    canvas.drawCircle(Offset(size.width * 0.9, size.height * 0.1), 60, paint);
+    canvas.drawCircle(
+      Offset(size.width * 0.9, size.height * 0.1),
+      90,
+      paint..color = accent.withValues(alpha: 0.05),
+    );
+
+    canvas.drawCircle(
+      Offset(size.width * 0.05, size.height * 0.95),
+      50,
+      paint..color = accent.withValues(alpha: 0.06),
+    );
+
+    final gridPaint = Paint()
+      ..color = accent.withValues(alpha: 0.04)
+      ..strokeWidth = 0.6;
+    for (double x = 0; x < size.width; x += 40) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+    }
+    for (double y = 0; y < size.height; y += 40) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _UserPanelDecorPainter old) =>
+      old.accent != accent;
+}
+
+class WeatherWidget extends StatelessWidget {
+  final WeatherData weather;
+  final bool loading;
+  final String city;
+  final VoidCallback onSettings;
+
+  const WeatherWidget({
+    super.key,
+    required this.weather,
+    this.loading = false,
+    this.city = '-',
+    required this.onSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return GlassPanel(
+        padding: const EdgeInsets.all(Spc.lg),
+        child: Row(
+          children: const [
+            SkeletonShimmer(width: 52, height: 52, radius: 14),
+            SizedBox(width: Spc.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SkeletonShimmer(width: 100, height: 12),
+                  SizedBox(height: Spc.sm),
+                  SkeletonShimmer(width: 140, height: 10),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final color = weather.color;
+
+    return GlassPanel(
+      padding: const EdgeInsets.all(Spc.lg),
+      borderColor: color.withValues(alpha: 0.35),
+      tint: color.withValues(alpha: 0.06),
+      child: Row(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: active
-                    ? [color.withOpacity(0.35), color.withOpacity(0.1)]
-                    : [P.surface, P.bgElevated],
+                colors: [
+                  color.withValues(alpha: 0.4),
+                  color.withValues(alpha: 0.1),
+                ],
               ),
-              borderRadius: BorderRadius.circular(R.md),
+              borderRadius: BorderRadius.circular(Radii.md),
               border: Border.all(
-                color: active
-                    ? color.withOpacity(0.85)
-                    : P.border.withOpacity(0.6),
-                width: active ? 1.6 : 1.2,
+                color: color.withValues(alpha: 0.5),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.35),
+                  blurRadius: 16,
+                ),
+              ],
+            ),
+            child: Icon(weather.icon, color: color, size: 28),
+          ),
+          const SizedBox(width: Spc.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '${weather.temperature.toStringAsFixed(1)}°C',
+                      style: TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: color,
+                        letterSpacing: -0.4,
+                        height: 1.0,
+                      ),
+                    ),
+                    const SizedBox(width: Spc.sm),
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(Radii.xs),
+                          border: Border.all(
+                            color: color.withValues(alpha: 0.4),
+                          ),
+                        ),
+                        child: Text(
+                          city.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            color: color,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    Text(
+                      weather.description,
+                      style: const TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.text2,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                    const SizedBox(width: Spc.sm),
+                    Container(
+                      width: 3,
+                      height: 3,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Palette.text3,
+                      ),
+                    ),
+                    const SizedBox(width: Spc.sm),
+                    const Icon(
+                      Icons.air_rounded,
+                      color: Palette.text3,
+                      size: 10,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '${weather.windSpeed.toStringAsFixed(1)} km/j',
+                      style: const TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Palette.text3,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              onSettings();
+            },
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: Palette.surfaceAlt.withValues(alpha: 0.8),
+                borderRadius: BorderRadius.circular(Radii.sm),
+                border: Border.all(color: Palette.border),
+              ),
+              child: const Icon(
+                Icons.location_on_outlined,
+                color: Palette.text2,
+                size: 16,
               ),
             ),
-            child: Column(
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class PrayerTimesWidget extends StatefulWidget {
+  final PrayerTimes prayer;
+  final bool loading;
+  final String city;
+  final VoidCallback onSettings;
+
+  const PrayerTimesWidget({
+    super.key,
+    required this.prayer,
+    required this.loading,
+    required this.city,
+    required this.onSettings,
+  });
+
+  @override
+  State<PrayerTimesWidget> createState() => _PrayerTimesWidgetState();
+}
+
+class _PrayerTimesWidgetState extends State<PrayerTimesWidget> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  String _fmtCountdown(Duration d) {
+    if (d.isNegative) return '--:--:--';
+    final h = d.inHours.toString().padLeft(2, '0');
+    final m = (d.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.loading) {
+      return GlassPanel(
+        padding: const EdgeInsets.all(Spc.lg),
+        child: Row(
+          children: const [
+            SkeletonShimmer(width: 44, height: 44, radius: 12),
+            SizedBox(width: Spc.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SkeletonShimmer(width: 140, height: 12),
+                  SizedBox(height: Spc.sm),
+                  SkeletonShimmer(width: 200, height: 10),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final prayer = widget.prayer;
+    final entries = prayer.entries;
+    final nextIdx = prayer.nextPrayerIndex;
+    final countdown = prayer.timeUntilNext;
+
+    return GlassPanel(
+      padding: const EdgeInsets.all(Spc.lg),
+      borderColor: Palette.mint.withValues(alpha: 0.35),
+      tint: Palette.mint.withValues(alpha: 0.05),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Palette.mint, Palette.teal],
+                  ),
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Palette.mint.withValues(alpha: 0.5),
+                      blurRadius: 14,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.mosque_rounded,
+                  color: Colors.white,
+                  size: 21,
+                ),
+              ),
+              const SizedBox(width: Spc.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'WAKTU SHOLAT',
+                      style: TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.mint,
+                        letterSpacing: 1.8,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.location_city_rounded,
+                          color: Palette.text3,
+                          size: 10,
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            widget.city.toUpperCase(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontFamily: AppConfig.fontBug,
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.w900,
+                              color: Palette.text2,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ),
+                        if (prayer.hijriDate.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            width: 3,
+                            height: 3,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Palette.text3,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              prayer.hijriDate.toUpperCase(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w800,
+                                color: Palette.text3,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  widget.onSettings();
+                },
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: Palette.surfaceAlt.withValues(alpha: 0.8),
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                    border: Border.all(color: Palette.border),
+                  ),
+                  child: const Icon(
+                    Icons.tune_rounded,
+                    color: Palette.text2,
+                    size: 16,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Spc.lg),
+          Row(
+            children: List.generate(entries.length, (i) {
+              final e = entries[i];
+              final active = i == nextIdx;
+              return Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    right: i == entries.length - 1 ? 0 : 4,
+                  ),
+                  child: AnimatedContainer(
+                    duration: Timings.normal,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: active
+                          ? LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                e.color.withValues(alpha: 0.30),
+                                e.color.withValues(alpha: 0.08),
+                              ],
+                            )
+                          : null,
+                      color: active
+                          ? null
+                          : Palette.surface.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                      border: Border.all(
+                        color: active
+                            ? e.color.withValues(alpha: 0.7)
+                            : Palette.borderSoft,
+                        width: active ? 1.3 : 1,
+                      ),
+                      boxShadow: active
+                          ? [
+                              BoxShadow(
+                                color: e.color.withValues(alpha: 0.35),
+                                blurRadius: 12,
+                              ),
+                            ]
+                          : null,
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(
+                          e.icon,
+                          size: 14,
+                          color: active ? e.color : Palette.text3,
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          e.label,
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 7.5,
+                            fontWeight: FontWeight.w900,
+                            color: active ? e.color : Palette.text3,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          e.time,
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            color: active ? e.color : Palette.text2,
+                            letterSpacing: 0.4,
+                            height: 1.0,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: Spc.md),
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: Spc.md,
+              vertical: Spc.sm,
+            ),
+            decoration: BoxDecoration(
+              color: Palette.bg0.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(Radii.sm),
+              border: Border.all(
+                color: Palette.mint.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Row(
+              children: [
+                const HaloDot(color: Palette.mint, size: 4),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${prayer.nextPrayerName} • ${prayer.nextPrayerTime}',
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+                Text(
+                  _fmtCountdown(countdown),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    color: Palette.mint,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LocationSettingsSheet extends StatelessWidget {
+  final String title;
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
+
+  const LocationSettingsSheet({
+    super.key,
+    required this.title,
+    required this.selectedIndex,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+      decoration: BoxDecoration(
+        color: Palette.surface,
+        borderRadius: BorderRadius.circular(Radii.xl),
+        border: Border.all(
+          color: Palette.violet.withValues(alpha: 0.42),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Palette.violet.withValues(alpha: 0.18),
+            blurRadius: 30,
+            spreadRadius: -8,
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Palette.border,
+                borderRadius: BorderRadius.circular(Radii.pill),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
               children: [
                 Container(
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [color, color.withOpacity(0.5)],
+                    gradient: const LinearGradient(
+                      colors: [Palette.cyan, Palette.violet],
                     ),
+                    borderRadius: BorderRadius.circular(Radii.sm),
                   ),
-                  child: Icon(
-                    AccentPresets.icons[label] ?? Icons.circle,
+                  child: const Icon(
+                    Icons.location_on_rounded,
                     color: Colors.white,
                     size: 20,
                   ),
                 ),
-                const SizedBox(height: S.sm),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 8.5,
-                    fontWeight: FontWeight.w900,
-                    color: active ? color : P.text3,
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// SETTING SCREEN
-// ═════════════════════════════════════════════════════════════════
-
-class SettingScreen extends StatefulWidget {
-  const SettingScreen({super.key});
-
-  @override
-  State<SettingScreen> createState() => _SettingScreenState();
-}
-
-class _SettingScreenState extends State<SettingScreen> {
-  bool _busy = false;
-  bool _idCopied = false;
-
-  @override
-  void initState() {
-    super.initState();
-    AppSession.refreshProfile().then((ok) {
-      if (!mounted || !ok || AppSession.profile == null) return;
-      ProfileStore.save(AppSession.profile!);
-    });
-  }
-
-  Future<void> _pickAvatar({required bool fromCamera}) async {
-    if (_busy) return;
-    final picker = ImagePicker();
-    try {
-      final file = await picker.pickImage(
-        source: fromCamera ? ImageSource.camera : ImageSource.gallery,
-        imageQuality: 88,
-        maxWidth: 720,
-      );
-      if (file == null) return;
-      setState(() => _busy = true);
-      final saved = await AvatarStore.saveAvatar(file);
-      final profile = ProfileStore.current;
-      if (profile != null) {
-        await AvatarStore.deleteAvatar(profile.avatarPath);
-        final updated = profile.copyWith(avatarPath: saved);
-        await ProfileStore.save(updated);
-        await AppSession.updateAvatar(saved);
-        await ProfileStore.save(updated);
-      }
-      if (!mounted) return;
-      HapticFeedback.mediumImpact();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _removeAvatar() async {
-    final profile = ProfileStore.current;
-    if (profile == null) return;
-    setState(() => _busy = true);
-    await AvatarStore.deleteAvatar(profile.avatarPath);
-    await ProfileStore.save(profile.copyWith(avatarPath: ''));
-    await AppSession.updateAvatar('');
-    if (mounted) setState(() => _busy = false);
-  }
-
-  void _showAvatarOptions() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        final hasAvatar =
-            (ProfileStore.current?.avatarPath ?? '').isNotEmpty;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(S.lg),
-            child: Glass(
-              radius: R.xxl,
-              tint: P.surface.withOpacity(0.98),
-              borderColor: P.violet.withOpacity(0.6),
-              padding: const EdgeInsets.all(S.lg),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: P.border,
-                      borderRadius: BorderRadius.circular(R.pill),
-                    ),
-                  ),
-                  const SizedBox(height: S.lg),
-                  const Text(
-                    'FOTO PROFIL',
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      color: P.bone,
-                      letterSpacing: 1.8,
-                    ),
-                  ),
-                  const SizedBox(height: S.lg),
-                  _avatarOption(
-                    icon: Icons.photo_library_rounded,
-                    color: P.violet,
-                    label: 'PILIH DARI GALERI',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _pickAvatar(fromCamera: false);
-                    },
-                  ),
-                  const SizedBox(height: S.sm),
-                  _avatarOption(
-                    icon: Icons.camera_alt_rounded,
-                    color: P.cyan,
-                    label: 'AMBIL DARI KAMERA',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _pickAvatar(fromCamera: true);
-                    },
-                  ),
-                  if (hasAvatar) ...[
-                    const SizedBox(height: S.sm),
-                    _avatarOption(
-                      icon: Icons.delete_outline_rounded,
-                      color: P.crimson,
-                      label: 'HAPUS FOTO',
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        _removeAvatar();
-                      },
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _avatarOption({
-    required IconData icon,
-    required Color color,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return Tap(
-      onTap: onTap,
-      child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: S.lg, vertical: S.md),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(R.md),
-          border: Border.all(color: color.withOpacity(0.4)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(R.sm),
-                border: Border.all(color: color.withOpacity(0.4)),
-              ),
-              child: Icon(icon, color: color, size: 20),
-            ),
-            const SizedBox(width: S.md),
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded,
-                color: color.withOpacity(0.7), size: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _copyId() {
-    final profile = ProfileStore.current;
-    if (profile == null) return;
-    Clipboard.setData(ClipboardData(text: profile.id));
-    HapticFeedback.mediumImpact();
-    setState(() => _idCopied = true);
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _idCopied = false);
-    });
-  }
-
-  Future<void> _confirmLogout() async {
-    final ok = await _confirm(
-      title: 'LOG OUT',
-      message:
-          'Kamu akan keluar dari sesi ini. Device binding tetap tersimpan di server.',
-      confirmText: 'LOG OUT',
-      confirmColor: P.crimson,
-    );
-    if (ok != true) return;
-    await AppSession.logout();
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
-  }
-
-  Future<void> _confirmDelete() async {
-    final ok = await _confirm(
-      title: 'HAPUS AKUN',
-      message:
-          'Akun akan dihapus dari backend beserta sesi dan binding perangkat. Tidak dapat dibatalkan.',
-      confirmText: 'HAPUS PERMANEN',
-      confirmColor: P.crimson,
-    );
-    if (ok != true) return;
-
-    setState(() => _busy = true);
-    final deleted = await AppSession.deleteAccount();
-    if (!deleted) {
-      if (mounted) setState(() => _busy = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Akun gagal dihapus dari server. Coba lagi saat online.'),
-        ),
-      );
-      return;
-    }
-    final profile = ProfileStore.current;
-    if (profile != null) await AvatarStore.deleteAvatar(profile.avatarPath);
-    await AppSession.clear();
-    await ProfileStore.clear();
-
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
-  }
-
-  Future<bool?> _confirm({
-    required String title,
-    required String message,
-    required String confirmText,
-    required Color confirmColor,
-  }) {
-    return showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.all(S.xl),
-          decoration: BoxDecoration(
-            color: P.surface,
-            borderRadius: BorderRadius.circular(R.xl),
-            border: Border.all(color: confirmColor.withOpacity(0.55)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: confirmColor.withOpacity(0.15),
-                  border: Border.all(
-                      color: confirmColor.withOpacity(0.55), width: 1.4),
-                ),
-                child: Icon(Icons.warning_amber_rounded,
-                    color: confirmColor, size: 28),
-              ),
-              const SizedBox(height: S.lg),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 1.8,
-                ),
-              ),
-              const SizedBox(height: S.sm),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 11,
-                  color: P.text2,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: S.xl),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: P.text2,
-                        side: const BorderSide(color: P.border),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(R.md),
-                        ),
-                      ),
-                      child: const Text('BATAL'),
-                    ),
-                  ),
-                  const SizedBox(width: S.sm),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: confirmColor,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(R.md),
-                        ),
-                      ),
-                      child: Text(confirmText),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      extendBody: true,
-      backgroundColor: P.bg,
-      body: Star(
-        child: ValueListenableBuilder<UserProfile?>(
-          valueListenable: ProfileStore.notifier,
-          builder: (_, profile, __) {
-            final p = profile ??
-                UserProfile(
-                  id: 'NEKO-LOADING',
-                  username: 'GUEST USER',
-                  avatarPath: '',
-                  expired: '--',
-                  role: 'basic',
-                  email: '',
-                  createdAt: DateTime.now(),
-                );
-            return SafeArea(
-              bottom: false,
-              child: CustomScrollView(
-                physics: const BouncingScrollPhysics(),
-                slivers: [
-                  SliverAppBar(
-                    pinned: true,
-                    elevation: 0,
-                    backgroundColor: P.bg.withOpacity(0.85),
-                    surfaceTintColor: Colors.transparent,
-                    expandedHeight: 60,
-                    leading: IconButton(
-                      icon: const Icon(Icons.arrow_back_rounded,
-                          color: P.bone),
-                      onPressed: () => Navigator.of(context).maybePop(),
-                    ),
-                    title: const Text(
-                      'SETTING',
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        color: P.bone,
-                        letterSpacing: 2.4,
-                      ),
-                    ),
-                    centerTitle: true,
-                  ),
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding:
-                          const EdgeInsets.fromLTRB(S.lg, S.lg, S.lg, 140),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _headerCard(p),
-                          const SizedBox(height: S.lg),
-                          _sectionLabel('INFORMASI AKUN'),
-                          const SizedBox(height: S.sm),
-                          _infoCard(p),
-                          const SizedBox(height: S.lg),
-                          _sectionLabel('KEAMANAN & SESI'),
-                          const SizedBox(height: S.sm),
-                          _actionCard(
-                            icon: Icons.logout_rounded,
-                            color: P.amber,
-                            title: 'Log Out',
-                            subtitle: 'Keluar dari sesi aktif',
-                            onTap: _confirmLogout,
-                          ),
-                          const SizedBox(height: S.sm),
-                          _actionCard(
-                            icon: Icons.delete_forever_rounded,
-                            color: P.crimson,
-                            title: 'Hapus Akun',
-                            subtitle: 'Hapus akun dari server',
-                            onTap: _confirmDelete,
-                            danger: true,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _sectionLabel(String label) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4),
-      child: Row(
-        children: [
-          Container(
-            width: 3,
-            height: 14,
-            decoration: BoxDecoration(
-              gradient:
-                  const LinearGradient(colors: [P.crimson, P.violet]),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              color: P.boneSoft,
-              letterSpacing: 2.0,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _headerCard(UserProfile p) {
-    final hasAvatar = p.avatarPath.isNotEmpty;
-    return Container(
-      padding: const EdgeInsets.all(S.xl),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(R.xxl),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF1C0B24), Color(0xFF0D0715), Color(0xFF2A0B15)],
-        ),
-        border: Border.all(color: P.crimson.withOpacity(0.35), width: 1.4),
-      ),
-      child: Column(
-        children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 138,
-                height: 138,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: SweepGradient(
-                    colors: [P.crimson, P.violet, P.cyan, P.crimson],
-                  ),
-                ),
-              ),
-              Container(
-                width: 128,
-                height: 128,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: P.bgDeep,
-                ),
-                child: ClipOval(
-                  child: hasAvatar
-                      ? Image.file(
-                          File(p.avatarPath),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              _initialAvatar(p.initial),
-                        )
-                      : _initialAvatar(p.initial),
-                ),
-              ),
-              Positioned(
-                right: 4,
-                bottom: 4,
-                child: Tap(
-                  onTap: _showAvatarOptions,
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [P.crimson, P.violetDeep],
-                      ),
-                      border: Border.all(color: P.bgDeep, width: 3),
-                    ),
-                    child: const Icon(Icons.camera_alt_rounded,
-                        color: Colors.white, size: 18),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: S.lg),
-          Text(
-            p.username.toUpperCase(),
-            style: const TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              color: P.bone,
-              letterSpacing: 0.8,
-              height: 1.0,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              RoleChipSimple(role: p.role, fontSize: 9.5),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: p.expiryColor.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(R.pill),
-                  border: Border.all(
-                      color: p.expiryColor.withOpacity(0.5), width: 1.1),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.schedule_rounded,
-                        size: 10, color: p.expiryColor),
-                    const SizedBox(width: 5),
-                    Text(
-                      p.expiryStatus,
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                        color: p.expiryColor,
-                        letterSpacing: 1.1,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: S.lg),
-          Tap(
-            onTap: _copyId,
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: S.lg, vertical: S.md),
-              decoration: BoxDecoration(
-                color: P.bgDeep.withOpacity(0.85),
-                borderRadius: BorderRadius.circular(R.md),
-                border: Border.all(
-                  color:
-                      (_idCopied ? P.sick : P.crimson).withOpacity(0.55),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    _idCopied
-                        ? Icons.check_circle_rounded
-                        : Icons.fingerprint_rounded,
-                    color: _idCopied ? P.sick : P.crimson,
-                    size: 16,
-                  ),
-                  const SizedBox(width: S.sm),
-                  Column(
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'USER ID',
-                        style: TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 8,
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 14,
                           fontWeight: FontWeight.w900,
-                          color: P.text3,
-                          letterSpacing: 1.6,
-                          height: 1.0,
+                          color: Palette.text,
+                          letterSpacing: 1.4,
                         ),
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        p.id,
+                      const Text(
+                        'PILIH KOTA / WILAYAH',
                         style: TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w900,
-                          color: _idCopied ? P.sick : P.bone,
-                          letterSpacing: 2.2,
-                          height: 1.0,
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w800,
+                          color: Palette.text3,
+                          letterSpacing: 1.1,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(width: S.lg),
-                  Icon(
-                    _idCopied
-                        ? Icons.check_rounded
-                        : Icons.content_copy_rounded,
-                    color: _idCopied ? P.sick : P.text3,
-                    size: 15,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _initialAvatar(String initial) {
-    return Container(
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [P.crimson, P.violetDeep],
-        ),
-      ),
-      child: Center(
-        child: Text(
-          initial,
-          style: const TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 52,
-            fontWeight: FontWeight.w900,
-            color: P.bone,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _infoCard(UserProfile p) {
-    return Glass(
-      radius: R.xl,
-      tint: P.bgElevated.withOpacity(0.9),
-      borderColor: P.border.withOpacity(0.6),
-      padding: const EdgeInsets.all(S.lg),
-      child: Column(
-        children: [
-          _infoRow(
-            icon: Icons.person_rounded,
-            color: P.violet,
-            label: 'USERNAME',
-            value: p.username,
-          ),
-          _divider(),
-          _infoRow(
-            icon: Icons.calendar_today_rounded,
-            color: P.amber,
-            label: 'TANGGAL EXPIRED',
-            value: p.expired.isEmpty ? '--' : p.expired,
-            trailingValue: p.daysUntilExpiry != null
-                ? '${p.daysUntilExpiry} hari'
-                : null,
-            valueColor: p.expiryColor,
-          ),
-          _divider(),
-          _infoRow(
-            icon: Icons.verified_user_rounded,
-            color: P.cyan,
-            label: 'STATUS AKUN',
-            value: p.daysUntilExpiry != null && p.daysUntilExpiry! >= 0
-                ? 'AKTIF'
-                : 'EXPIRED',
-            valueColor: p.daysUntilExpiry != null && p.daysUntilExpiry! >= 0
-                ? P.sick
-                : P.crimson,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _infoRow({
-    required IconData icon,
-    required Color color,
-    required String label,
-    required String value,
-    String? trailingValue,
-    Color? valueColor,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: S.md),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(R.sm),
-              border: Border.all(color: color.withOpacity(0.35)),
-            ),
-            child: Icon(icon, color: color, size: 17),
-          ),
-          const SizedBox(width: S.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 8.5,
-                    fontWeight: FontWeight.w900,
-                    color: P.text3,
-                    letterSpacing: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    color: valueColor ?? P.bone,
-                    letterSpacing: 0.6,
-                  ),
                 ),
               ],
             ),
-          ),
-          if (trailingValue != null)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: (valueColor ?? P.violet).withOpacity(0.14),
-                borderRadius: BorderRadius.circular(R.xs),
-                border: Border.all(
-                  color: (valueColor ?? P.violet).withOpacity(0.4),
-                ),
-              ),
-              child: Text(
-                trailingValue,
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w900,
-                  color: valueColor ?? P.violet,
-                  letterSpacing: 1.0,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _divider() {
-    return Container(
-      height: 1,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.transparent, P.border, Colors.transparent],
-        ),
-      ),
-    );
-  }
-
-  Widget _actionCard({
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-    bool danger = false,
-  }) {
-    return Tap(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(S.md),
-        decoration: BoxDecoration(
-          color: color.withOpacity(danger ? 0.08 : 0.05),
-          borderRadius: BorderRadius.circular(R.lg),
-          border: Border.all(color: color.withOpacity(0.35), width: 1.3),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(R.md),
-                border: Border.all(color: color.withOpacity(0.45)),
-              ),
-              child: Icon(icon, color: color, size: 21),
-            ),
-            const SizedBox(width: S.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title.toUpperCase(),
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w900,
-                      color: color,
-                      letterSpacing: 1.2,
+            const SizedBox(height: 14),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const BouncingScrollPhysics(),
+                itemCount: kCityPresets.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 6),
+                itemBuilder: (_, i) {
+                  final city = kCityPresets[i];
+                  final selected = i == selectedIndex;
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        onSelect(i);
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: AnimatedContainer(
+                        duration: Timings.fast,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? Palette.violet.withValues(alpha: 0.16)
+                              : Palette.surfaceAlt,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: selected
+                                ? Palette.violet.withValues(alpha: 0.6)
+                                : Palette.border,
+                            width: selected ? 1.4 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.location_city_rounded,
+                              size: 16,
+                              color:
+                                  selected ? Palette.violet : Palette.text3,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                city.name.toUpperCase(),
+                                style: TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: selected
+                                      ? Palette.violet
+                                      : Palette.text,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              city.country.toUpperCase(),
+                              style: const TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w800,
+                                color: Palette.text4,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                            if (selected) ...[
+                              const SizedBox(width: 8),
+                              const Icon(
+                                Icons.check_circle_rounded,
+                                color: Palette.violet,
+                                size: 16,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 10,
-                      color: P.text2,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
+                  );
+                },
               ),
             ),
-            Icon(Icons.chevron_right_rounded,
-                color: color.withOpacity(0.6), size: 20),
           ],
         ),
       ),
@@ -8375,887 +5783,205 @@ class _SettingScreenState extends State<SettingScreen> {
   }
 }
 
-class RoleChipSimple extends StatelessWidget {
-  final String role;
-  final double fontSize;
-  const RoleChipSimple({
-    super.key,
-    required this.role,
-    this.fontSize = 9,
-  });
+class AuthResult {
+  final String token;
+  final AppUser user;
+  const AuthResult({required this.token, required this.user});
+}
+
+class SessionGate extends StatelessWidget {
+  const SessionGate({super.key});
 
   @override
   Widget build(BuildContext context) {
-    Color color;
-    Color color2;
-    IconData icon;
-    String label;
-    switch (role.toLowerCase()) {
-      case 'owner':
-        color = P.gold;
-        color2 = P.rust;
-        icon = Icons.workspace_premium_rounded;
-        label = 'OWNER';
-        break;
-      case 'admin':
-        color = P.violet;
-        color2 = P.violetDeep;
-        icon = Icons.shield_rounded;
-        label = 'ADMIN';
-        break;
-      case 'vip':
-        color = P.amber;
-        color2 = P.rust;
-        icon = Icons.star_rounded;
-        label = 'VIP';
-        break;
-      default:
-        color = P.crimson;
-        color2 = P.bloodDeep;
-        icon = Icons.person_rounded;
-        label = 'BASIC';
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [color.withOpacity(0.28), color2.withOpacity(0.08)],
-        ),
-        borderRadius: BorderRadius.circular(R.pill),
-        border: Border.all(color: color.withOpacity(0.6), width: 1.1),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: fontSize + 2, color: color),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: fontSize,
-              fontWeight: FontWeight.w900,
-              color: color,
-              letterSpacing: 1.2,
-            ),
-          ),
-        ],
-      ),
-    );
+    return const DashboardScreen();
   }
 }
 
-// ═════════════════════════════════════════════════════════════════
-// TOOLS SCREEN (placeholder)
-// ═════════════════════════════════════════════════════════════════
-
-class ToolsScreen extends StatelessWidget {
-  const ToolsScreen({super.key});
+class LoginScreen extends StatefulWidget {
+  final ValueChanged<AppUser>? onLoggedIn;
+  const LoginScreen({super.key, this.onLoggedIn});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: P.bg,
-      appBar: AppBar(
-        backgroundColor: P.bg,
-        elevation: 0,
-        title: const Text(
-          'TOOLS',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 2.4,
-          ),
-        ),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(S.xl),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: P.cyan.withOpacity(0.12),
-                  border: Border.all(color: P.cyan.withOpacity(0.5)),
-                ),
-                child: const Icon(Icons.build_rounded,
-                    color: P.cyan, size: 42),
-              ),
-              const SizedBox(height: S.lg),
-              const Text(
-                'TOOLS',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 3,
-                ),
-              ),
-              const SizedBox(height: S.sm),
-              const Text(
-                'Halaman tools akan segera hadir.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 12,
-                  color: P.text2,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  State<LoginScreen> createState() => _LoginScreenState();
 }
 
-// ═════════════════════════════════════════════════════════════════
-// RAT SCREEN (placeholder — siap diganti ke rat.dart)
-// ═════════════════════════════════════════════════════════════════
-
-class RatScreen extends StatelessWidget {
-  const RatScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: P.bg,
-      appBar: AppBar(
-        backgroundColor: P.bg,
-        elevation: 0,
-        title: const Text(
-          'RAT HUB',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 2.4,
-          ),
-        ),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(S.xl),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: P.crimson.withOpacity(0.12),
-                  border: Border.all(color: P.crimson.withOpacity(0.5)),
-                ),
-                child: const Icon(Icons.settings_remote_rounded,
-                    color: P.crimson, size: 42),
-              ),
-              const SizedBox(height: S.lg),
-              const Text(
-                'RAT HUB',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 3,
-                ),
-              ),
-              const SizedBox(height: S.sm),
-              const Text(
-                'Halaman RAT akan segera hadir.\nSiapkan rat.dart lalu aktifkan import-nya.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 11,
-                  color: P.text2,
-                  height: 1.5,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════
-// EXTRA SCREENS
-// ═════════════════════════════════════════════════════════════════
-
-class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
-
-  @override
-  State<ChatScreen> createState() => _ChatScreenState();
-}
-
-class _ChatScreenState extends State<ChatScreen> {
-  final _controller = TextEditingController();
-  final _scrollController = ScrollController();
-  final List<ChatMessageData> _messages = <ChatMessageData>[];
-  bool _loading = true;
-  bool _sending = false;
+class _LoginScreenState extends State<LoginScreen> {
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  final _api = BackendSvc();
+  bool _loading = false;
+  bool _obscure = true;
   String? _error;
 
   @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
   void dispose() {
-    _controller.dispose();
-    _scrollController.dispose();
+    _username.dispose();
+    _password.dispose();
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _login() async {
+    FocusScope.of(context).unfocus();
     setState(() {
       _loading = true;
       _error = null;
     });
-    try {
-      final items = await LiveServices.fetchChats();
-      if (!mounted) return;
-      setState(() {
-        _messages
-          ..clear()
-          ..addAll(items);
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
+    final result = await _api.login(
+      username: _username.text,
+      password: _password.text,
+    );
+    if (!mounted) return;
+    if (result == null) {
       setState(() {
         _loading = false;
-        _error = error.toString().replaceFirst('Exception: ', '');
+        _error = 'USERNAME / PASSWORD SALAH ATAU SERVER TIDAK TERHUBUNG';
       });
+      return;
     }
-  }
-
-  Future<void> _send() async {
-    final value = _controller.text.trim();
-    if (value.isEmpty || _sending) return;
-    setState(() => _sending = true);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('session_token', result.token);
+    await prefs.setString('session_username', result.user.username);
+    await prefs.setString('session_role', result.user.role);
+    await prefs.setString('session_expired', result.user.expired);
+    setState(() => _loading = false);
     try {
-      final item = await LiveServices.sendChat(value);
-      if (!mounted) return;
-      _controller.clear();
-      setState(() => _messages.add(item));
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Chat gagal dikirim: $error')),
+      if (await FlutterOverlayWindow.isActive()) {
+        await FlutterOverlayWindow.shareData(jsonEncode({
+          'type': 'settings',
+          'username': result.user.username,
+          'role': result.user.role,
+          'expired': result.user.expired,
+        }));
+      }
+    } catch (_) {}
+    widget.onLoggedIn?.call(result.user);
+    if (widget.onLoggedIn == null && mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
       );
-    } finally {
-      if (mounted) setState(() => _sending = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final accent = accentNotifier.value;
-    final currentUser = AppSession.profile?.username ?? '';
-
     return Scaffold(
-      backgroundColor: P.bg,
-      appBar: AppBar(
-        backgroundColor: P.bg,
-        elevation: 0,
-        title: const Text(
-          'COMMUNITY CHAT',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.5,
-          ),
-        ),
-        actions: [
-          IconButton(
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(S.xl),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.cloud_off_rounded,
-                                  size: 46, color: P.text3),
-                              const SizedBox(height: S.md),
-                              Text(
-                                _error!,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: P.text2),
-                              ),
-                              const SizedBox(height: S.md),
-                              ElevatedButton.icon(
-                                onPressed: _load,
-                                icon: const Icon(Icons.refresh_rounded),
-                                label: const Text('COBA LAGI'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : _messages.isEmpty
-                        ? const Center(
-                            child: Text('Belum ada pesan.',
-                                style: TextStyle(color: P.text3)),
-                          )
-                        : ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.fromLTRB(
-                                S.lg, S.md, S.lg, S.lg),
-                            itemCount: _messages.length,
-                            itemBuilder: (_, index) {
-                              final item = _messages[index];
-                              final mine = item.sender.toLowerCase() ==
-                                  currentUser.toLowerCase();
-                              return Align(
-                                alignment: mine
-                                    ? Alignment.centerRight
-                                    : Alignment.centerLeft,
-                                child: Container(
-                                  constraints:
-                                      const BoxConstraints(maxWidth: 320),
-                                  margin:
-                                      const EdgeInsets.only(bottom: S.sm),
-                                  padding: const EdgeInsets.all(S.md),
-                                  decoration: BoxDecoration(
-                                    color: mine
-                                        ? accent.withOpacity(0.16)
-                                        : P.surface,
-                                    borderRadius:
-                                        BorderRadius.circular(R.md),
-                                    border: Border.all(
-                                      color: mine
-                                          ? accent.withOpacity(0.42)
-                                          : P.border,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        item.sender,
-                                        style: TextStyle(
-                                          color: mine ? accent : P.bone,
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 5),
-                                      Text(
-                                        item.message,
-                                        style: const TextStyle(
-                                            color: P.text, height: 1.35),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(S.md, 0, S.md, S.md),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      minLines: 1,
-                      maxLines: 4,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      decoration: InputDecoration(
-                        hintText: 'Tulis pesan...',
-                        filled: true,
-                        fillColor: P.surface,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(R.pill),
-                          borderSide: const BorderSide(color: P.border),
+      backgroundColor: Palette.bg0,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Palette.surface, Palette.surfaceAlt],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Palette.border),
+              boxShadow: [
+                BoxShadow(
+                  color: Palette.violet.withValues(alpha: 0.18),
+                  blurRadius: 30,
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: ClipOval(
+                    child: Image.asset(
+                      AppConfig.assetLogo,
+                      width: 78,
+                      height: 78,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const CircleAvatar(
+                        radius: 39,
+                        backgroundColor: Palette.surfaceSoft,
+                        child: Icon(
+                          Icons.auto_awesome_rounded,
+                          color: Palette.cyan,
+                          size: 32,
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: S.sm),
-                  IconButton.filled(
-                    onPressed: _sending ? null : _send,
-                    style: IconButton.styleFrom(
-                      backgroundColor: accent,
-                      foregroundColor: Colors.white,
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'NEKO ASSIST',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 2.2,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'LOGIN DARI AKUN SERVER',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 9,
+                    color: Palette.text3,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                TextField(
+                  controller: _username,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Username',
+                    prefixIcon: Icon(Icons.person_rounded),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _password,
+                  obscureText: _obscure,
+                  onSubmitted: (_) => _loading ? null : _login(),
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: const Icon(Icons.lock_rounded),
+                    suffixIcon: IconButton(
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                      icon: Icon(
+                        _obscure
+                            ? Icons.visibility_rounded
+                            : Icons.visibility_off_rounded,
+                      ),
                     ),
-                    icon: _sending
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.send_rounded),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      color: Palette.coral,
+                    ),
                   ),
                 ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class BackendStatusScreen extends StatefulWidget {
-  const BackendStatusScreen({super.key});
-
-  @override
-  State<BackendStatusScreen> createState() => _BackendStatusScreenState();
-}
-
-class _BackendStatusScreenState extends State<BackendStatusScreen> {
-  Map<String, dynamic>? _status;
-  String? _error;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final result = await LiveServices.fetchBackendStatus();
-      if (!mounted) return;
-      setState(() {
-        _status = result;
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = error.toString().replaceFirst('Exception: ', '');
-      });
-    }
-  }
-
-  String _num(dynamic value, [String suffix = '']) {
-    if (value is num) return '${value.toStringAsFixed(1)}$suffix';
-    return '--';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = accentNotifier.value;
-    final metrics = (_status?['metrics'] as Map?)?.cast<String, dynamic>();
-    final heartbeat =
-        (_status?['heartbeat'] as Map?)?.cast<String, dynamic>();
-
-    return Scaffold(
-      backgroundColor: P.bg,
-      appBar: AppBar(
-        backgroundColor: P.bg,
-        elevation: 0,
-        title: const Text(
-          'BACKEND STATUS',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.5,
-          ),
-        ),
-        actions: [
-          IconButton(
-              onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(S.xl),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.cloud_off_rounded,
-                            size: 48, color: P.crimson),
-                        const SizedBox(height: S.md),
-                        Text(_error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: P.text2)),
-                        const SizedBox(height: S.md),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('RETRY')),
-                      ],
-                    ),
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.all(S.lg),
-                  children: [
-                    Glass(
-                      radius: R.lg,
-                      tint: P.surface.withOpacity(0.9),
-                      borderColor: accent.withOpacity(0.45),
-                      padding: const EdgeInsets.all(S.lg),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Halo(color: P.sick, size: 4),
-                              const SizedBox(width: S.sm),
-                              Text(
-                                '${heartbeat?['status'] ?? 'unknown'}'
-                                    .toUpperCase(),
-                                style: const TextStyle(
-                                  color: P.sick,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.4,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: S.lg),
-                          _row('Uptime',
-                              '${heartbeat?['uptime_seconds'] ?? '--'} detik'),
-                          _row('Online',
-                              '${heartbeat?['online_count'] ?? '--'} device'),
-                          _row('Session',
-                              '${heartbeat?['sessions'] ?? '--'}'),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: S.md),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _metric(
-                              'CPU', _num(metrics?['cpu'], '%'), accent),
-                        ),
-                        const SizedBox(width: S.md),
-                        Expanded(
-                          child: _metric(
-                              'RAM', _num(metrics?['ram'], '%'), P.violet),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: S.md),
-                    _metric('DISK', _num(metrics?['disk'], '%'), P.cyan),
-                  ],
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: _loading ? null : _login,
+                  icon: _loading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.login_rounded),
+                  label: Text(_loading ? 'MENYAMBUNG...' : 'MASUK'),
                 ),
-    );
-  }
-
-  Widget _row(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(color: P.text3))),
-          Text(value,
-              style: const TextStyle(
-                  color: P.bone, fontWeight: FontWeight.w800)),
-        ],
-      ),
-    );
-  }
-
-  Widget _metric(String label, String value, Color color) {
-    return Glass(
-      radius: R.lg,
-      tint: P.surface.withOpacity(0.9),
-      borderColor: color.withOpacity(0.35),
-      padding: const EdgeInsets.all(S.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: P.text3,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.2,
-            ),
-          ),
-          const SizedBox(height: S.sm),
-          Text(
-            value,
-            style: TextStyle(
-              color: color,
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class NewsResearchScreen extends StatefulWidget {
-  const NewsResearchScreen({super.key});
-
-  @override
-  State<NewsResearchScreen> createState() => _NewsResearchScreenState();
-}
-
-class _NewsResearchScreenState extends State<NewsResearchScreen> {
-  List<NewsData> _items = <NewsData>[];
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final items = await LiveServices.fetchNews();
-      if (!mounted) return;
-      setState(() {
-        _items = items;
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = error.toString().replaceFirst('Exception: ', '');
-      });
-    }
-  }
-
-  Future<void> _open(NewsData item) async {
-    final url = item.linkUrl;
-    if (url == null || url.isEmpty) return;
-    final uri = Uri.tryParse(url);
-    if (uri == null) return;
-    try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: P.bg,
-      appBar: AppBar(
-        backgroundColor: P.bg,
-        elevation: 0,
-        title: const Text(
-          'PUBLIC RESEARCH',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.4,
-          ),
-        ),
-        actions: [
-          IconButton(
-              onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(S.xl),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.cloud_off_rounded,
-                            size: 48, color: P.crimson),
-                        const SizedBox(height: S.md),
-                        Text(_error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: P.text2)),
-                        const SizedBox(height: S.md),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('RETRY')),
-                      ],
-                    ),
-                  ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.all(S.lg),
-                  itemCount: _items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: S.sm),
-                  itemBuilder: (_, index) {
-                    final item = _items[index];
-                    return Tap(
-                      onTap: () => _open(item),
-                      child: Glass(
-                        radius: R.lg,
-                        tint: P.surface.withOpacity(0.92),
-                        borderColor: item.c1.withOpacity(0.35),
-                        padding: const EdgeInsets.all(S.md),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    item.source,
-                                    style: TextStyle(
-                                      color: item.c1,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 10,
-                                      letterSpacing: 1,
-                                    ),
-                                  ),
-                                ),
-                                Text(item.time,
-                                    style: const TextStyle(
-                                        color: P.text3, fontSize: 9)),
-                              ],
-                            ),
-                            const SizedBox(height: S.sm),
-                            Text(
-                              item.title,
-                              style: const TextStyle(
-                                color: P.bone,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w900,
-                                height: 1.2,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              item.description,
-                              maxLines: 4,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: P.text2,
-                                  fontSize: 11,
-                                  height: 1.45),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-    );
-  }
-}
-
-class CodingLabScreen extends StatefulWidget {
-  const CodingLabScreen({super.key});
-
-  @override
-  State<CodingLabScreen> createState() => _CodingLabScreenState();
-}
-
-class _CodingLabScreenState extends State<CodingLabScreen> {
-  final _controller = TextEditingController(
-    text: '''// NekoVerse Coding Lab
-void main() {
-  print('Hello, NekoVerse');
-}
-''',
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: _controller.text));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Kode disalin ke clipboard.')),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = accentNotifier.value;
-    return Scaffold(
-      backgroundColor: P.bg,
-      appBar: AppBar(
-        backgroundColor: P.bg,
-        elevation: 0,
-        title: const Text(
-          'CODING LAB',
-          style: TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.4,
-          ),
-        ),
-        actions: [
-          IconButton(onPressed: _copy, icon: const Icon(Icons.copy_rounded)),
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(S.lg),
-        child: TextField(
-          controller: _controller,
-          expands: true,
-          minLines: null,
-          maxLines: null,
-          textAlignVertical: TextAlignVertical.top,
-          style: const TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 13,
-            color: P.bone,
-            height: 1.45,
-          ),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: const Color(0xFF07070D),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(R.lg),
-              borderSide: BorderSide(color: accent.withOpacity(0.35)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(R.lg),
-              borderSide: BorderSide(color: accent, width: 1.4),
+              ],
             ),
           ),
         ),
@@ -9263,10 +5989,6 @@ void main() {
     );
   }
 }
-
-// ═════════════════════════════════════════════════════════════════
-// DASHBOARD
-// ═════════════════════════════════════════════════════════════════
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -9277,885 +5999,1689 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen>
     with TickerProviderStateMixin {
+  final _fb = BackendSvc();
+  final _usersSvc = UserSvc();
+  final _weatherSvc = WeatherSvc();
+  final _prayerSvc = PrayerSvc();
+
+  AppUser _user = AppUser.fallback();
+  DashboardStats _stats = DashboardStats.empty();
+  List<ChatMsg> _chats = [];
+  List<AppUser> _allUsers = [];
+  List<AppUser> _backendUsers = [];
+  List<SyamStory> _stories = [];
+  List<NotifItem> _notifs = [];
+  List<LogEntry> _logs = [];
+  NetworkSnapshot _network = NetworkSnapshot.empty();
+  WeatherData _weather = WeatherData.empty();
+  PrayerTimes _prayer = PrayerTimes.empty();
+
+  int _weatherCityIndex = 0;
+  int _prayerCityIndex = 0;
+
+  BackendState _backend = BackendState.loading;
+  bool _backendAvailable = false;
+  bool _loading = true;
+  bool _refreshing = false;
+  bool _loginLogged = false;
+  bool _weatherLoading = true;
+  bool _prayerLoading = true;
+  String _status = 'CHECKING';
+  DateTime _lastUpdate = DateTime.now();
+
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _roleFilter = 'all';
+  UserSort _sortMode = UserSort.name;
+
+  Timer? _poll;
+  Timer? _weatherTimer;
+  Timer? _prayerTimer;
   late AnimationController _entrance;
   late Animation<double> _fade;
-  late Animation<Offset> _slide;
-  late ScrollController _scrollController;
-  int _navIndex = 0;
-  double _scrollProgress = 0;
-  bool _showScrollTop = false;
-
-  // ─── 2 MENU CAROUSEL ───
-  final List<ToolData> _tools = const [
-    ToolData(
-      code: 'TOOL-01',
-      title: 'Community Chat',
-      subtitle: 'Pesan komunitas realtime',
-      tag: 'LIVE',
-      icon: Icons.chat_bubble_rounded,
-      colors: [Color(0xFFC21628), Color(0xFF8B0A1A)],
-      statLabel: 'MODE',
-      statValue: 'ONLINE',
-    ),
-    ToolData(
-      code: 'TOOL-02',
-      title: 'Backend Status',
-      subtitle: 'CPU, RAM, disk & session',
-      tag: 'LIVE',
-      icon: Icons.cloud_sync_rounded,
-      colors: [Color(0xFF22D3EE), Color(0xFF0891B2)],
-      statLabel: 'DATA',
-      statValue: 'REALTIME',
-      danger: false,
-    ),
-  ];
-
-  final List<NewsData> _news = <NewsData>[];
-
-  final List<StoryData> _stories = <StoryData>[];
-
-  WeatherData? _weatherData;
-  bool _weatherLoading = true;
-  String? _weatherError;
-  Timer? _weatherTimer;
-  Timer? _newsTimer;
-  Timer? _storyTimer;
-  bool _newsLoading = true;
-  String? _newsError;
-  String? _storyError;
-  String? _selectedOrbitalLabel;
-  bool _postingStory = false;
-
-  List<CommandItem> _buildCommands() {
-    return [
-      CommandItem(
-        label: 'Refresh Cuaca',
-        description: 'Perbarui data cuaca Jakarta realtime',
-        icon: Icons.cloud_sync_rounded,
-        color: P.cyan,
-        action: () async => _refreshWeather(),
-      ),
-      CommandItem(
-        label: 'Refresh Berita',
-        description: 'Ambil feed berita terbaru',
-        icon: Icons.newspaper_rounded,
-        color: P.rust,
-        action: () async => _refreshNews(),
-      ),
-      CommandItem(
-        label: 'Refresh Story',
-        description: 'Muat ulang story komunitas',
-        icon: Icons.auto_awesome_rounded,
-        color: P.crimson,
-        action: () async => _refreshStories(),
-      ),
-      CommandItem(
-        label: 'Buat Story Baru',
-        description: 'Posting text / gambar / video',
-        icon: Icons.add_circle_rounded,
-        color: P.violet,
-        action: () async => _showCreateStorySheet(),
-      ),
-      CommandItem(
-        label: 'Buka Setting',
-        description: 'Akun & pengaturan',
-        icon: Icons.settings_rounded,
-        color: P.teal,
-        action: () async => _openSetting(),
-      ),
-      CommandItem(
-        label: 'Ganti Warna Aksen',
-        description: 'Ubah tema warna aplikasi',
-        icon: Icons.palette_rounded,
-        color: P.amber,
-        action: () async {
-          await showModalBottomSheet<void>(
-            context: context,
-            backgroundColor: Colors.transparent,
-            isScrollControlled: true,
-            builder: (_) => const AccentPickerSheet(),
-          );
-        },
-      ),
-      CommandItem(
-        label: 'Force Sync All',
-        description: 'Sync semua data live',
-        icon: Icons.sync_rounded,
-        color: P.plasma,
-        action: () async {
-          await Future.wait([
-            _refreshWeather(),
-            _refreshNews(),
-            _refreshStories(),
-          ]);
-        },
-      ),
-    ];
-  }
-
-  void _showCommandPalette() {
-    HapticFeedback.mediumImpact();
-    showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Command Palette',
-      barrierColor: Colors.black.withOpacity(0.7),
-      transitionDuration: const Duration(milliseconds: 320),
-      pageBuilder: (_, __, ___) => BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: CommandPalette(commands: _buildCommands()),
-      ),
-      transitionBuilder: (_, anim, __, child) =>
-          FadeTransition(opacity: anim, child: child),
-    );
-  }
-
-  // ─── NAVIGATION HANDLERS ───
-  // index: 0=HOME, 1=MENU, 2=TOOLS, 3=SETTING
-  // Center button = RAT
-  Future<void> _handleNavTap(int index) async {
-    if (index == 0) {
-      if (mounted) setState(() => _navIndex = 0);
-      return;
-    }
-    setState(() => _navIndex = index);
-    if (index == 1) {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => const menuui.MenuScreen(),
-        ),
-      );
-    } else if (index == 2) {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(builder: (_) => const ToolsScreen()),
-      );
-    } else if (index == 3) {
-      await _openSetting();
-    }
-    if (mounted) setState(() => _navIndex = 0);
-  }
-
-  Future<void> _openSetting() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const SettingScreen()),
-    );
-    if (!mounted) return;
-    setState(() => _navIndex = 0);
-  }
-
-  // Center button = RAT
-  Future<void> _openRat() async {
-    // TODO: ganti ke ratui.RatScreen() saat rat.dart siap.
-    // import 'rat.dart' as ratui;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const RatScreen()),
-    );
-  }
-
-  Future<void> _handleCarouselTool(String code) async {
-    switch (code) {
-      case 'TOOL-01':
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(builder: (_) => const ChatScreen()),
-        );
-        return;
-      case 'TOOL-02':
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-              builder: (_) => const BackendStatusScreen()),
-        );
-        return;
-    }
-  }
-
-  // ─── ORBITAL: MENU — RAT — TOOLS + 3 lain ───
-  List<OrbitalItem> get _orbitalItems => [
-        OrbitalItem(
-          label: 'MENU',
-          sub: 'Explore',
-          icon: Icons.apps_rounded,
-          c1: P.violet,
-          c2: P.violetDeep,
-          onTap: () => setState(() => _selectedOrbitalLabel = 'MENU'),
-        ),
-        OrbitalItem(
-          label: 'RAT',
-          sub: 'Remote',
-          icon: Icons.settings_remote_rounded,
-          c1: P.crimson,
-          c2: P.bloodDeep,
-          onTap: () => setState(() => _selectedOrbitalLabel = 'RAT'),
-        ),
-        OrbitalItem(
-          label: 'TOOLS',
-          sub: 'Utilities',
-          icon: Icons.build_rounded,
-          c1: P.cyan,
-          c2: P.cyanDeep,
-          onTap: () => setState(() => _selectedOrbitalLabel = 'TOOLS'),
-        ),
-        OrbitalItem(
-          label: 'OSINT',
-          sub: 'Intel',
-          icon: Icons.travel_explore_rounded,
-          c1: P.teal,
-          c2: P.rot,
-          onTap: () => setState(() => _selectedOrbitalLabel = 'OSINT'),
-        ),
-        OrbitalItem(
-          label: 'PAYLOAD',
-          sub: 'API Lab',
-          icon: Icons.memory_rounded,
-          c1: P.pink,
-          c2: P.pinkDeep,
-          onTap: () => setState(() => _selectedOrbitalLabel = 'PAYLOAD'),
-        ),
-        OrbitalItem(
-          label: 'SHIELD',
-          sub: 'Secure',
-          icon: Icons.shield_rounded,
-          c1: P.sick,
-          c2: P.rot,
-          onTap: () => setState(() => _selectedOrbitalLabel = 'SHIELD'),
-        ),
-      ];
-
-  Future<void> _openSelectedTool() async {
-    final label = _selectedOrbitalLabel;
-    if (label == null) return;
-    setState(() => _selectedOrbitalLabel = null);
-
-    switch (label) {
-      case 'MENU':
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-              builder: (_) => const menuui.MenuScreen()),
-        );
-        return;
-      case 'RAT':
-        await _openRat();
-        return;
-      case 'TOOLS':
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(builder: (_) => const ToolsScreen()),
-        );
-        return;
-      case 'OSINT':
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-              builder: (_) => const NewsResearchScreen()),
-        );
-        return;
-      case 'SHIELD':
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-              builder: (_) => const BackendStatusScreen()),
-        );
-        return;
-      case 'PAYLOAD':
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: P.surface,
-            title: Text(
-              label,
-              style: const TextStyle(
-                color: P.bone,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            content: const Text(
-              'Fitur payload dan kontrol perangkat tidak dijalankan di aplikasi ini.',
-              style: TextStyle(color: P.text2, height: 1.4),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('TUTUP'),
-              ),
-            ],
-          ),
-        );
-        return;
-    }
-  }
-
-  // ─── WEATHER ───
-  Future<void> _refreshWeather() async {
-    if (mounted) {
-      setState(() {
-        _weatherLoading = true;
-        _weatherError = null;
-      });
-    }
-    try {
-      final result = await LiveServices.fetchWeather();
-      if (!mounted) return;
-      setState(() {
-        _weatherData = result;
-        _weatherLoading = false;
-        _weatherError = null;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _weatherLoading = false;
-        _weatherError = _friendlyError(error, 'Cuaca belum bisa dimuat.');
-      });
-    }
-  }
-
-  Future<void> _refreshNews() async {
-    if (mounted) {
-      setState(() {
-        _newsLoading = true;
-        _newsError = null;
-      });
-    }
-    try {
-      final result = await LiveServices.fetchNews();
-      if (!mounted) return;
-      setState(() {
-        _news
-          ..clear()
-          ..addAll(result);
-        _newsLoading = false;
-        _newsError = null;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _newsLoading = false;
-        _newsError = _friendlyError(error, 'Berita belum bisa dimuat.');
-      });
-    }
-  }
-
-  Future<void> _refreshStories() async {
-    try {
-      final result = await LiveServices.fetchStories();
-      if (!mounted) return;
-      setState(() {
-        _stories
-          ..clear()
-          ..addAll(result);
-        _storyError = null;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _storyError = _friendlyError(
-          error,
-          'Story online belum terhubung ke database.',
-        );
-      });
-    }
-  }
-
-  String _friendlyError(Object error, String fallback) {
-    final message = error.toString().replaceFirst('Exception: ', '').trim();
-    if (message.isEmpty || message.contains('SocketException')) {
-      return 'Tidak ada koneksi internet. Coba lagi nanti.';
-    }
-    if (message.contains('403') || message.contains('401')) {
-      return 'Akses ditolak server.';
-    }
-    if (message.length > 100) return fallback;
-    return message;
-  }
-
-  // ─── POST STORY — Sheet dengan pilihan TEXT / IMAGE / VIDEO ───
-  void _showCreateStorySheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _CreateStorySheet(onSubmit: _submitStory),
-    );
-  }
-
-  Future<void> _submitStory({
-    required String text,
-    String? mediaUrl,
-    StoryMediaType mediaType = StoryMediaType.text,
-  }) async {
-    if (_postingStory) return;
-    setState(() => _postingStory = true);
-    try {
-      final username = ProfileStore.current?.username ?? 'GUEST USER';
-      await LiveServices.publishStory(
-        username: username,
-        text: text,
-        mediaUrl: mediaUrl,
-        mediaType: mediaType,
-      );
-      await _refreshStories();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Story berhasil dipublikasikan.')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      final message = _friendlyError(error, 'Story gagal dikirim.');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Story gagal dikirim: $message')),
-      );
-    } finally {
-      if (mounted) setState(() => _postingStory = false);
-    }
-  }
-
-  void _openStoryViewer(StoryData story) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => StoryViewerScreen(story: story),
-      ),
-    );
-  }
-
-  void _onStoryTap(StoryData story) {
-    _openStoryViewer(story);
-  }
+  late TabController _tabController;
+  late List<CarouselSlide> _slides;
+  late Size _screenSize;
 
   @override
   void initState() {
     super.initState();
     _entrance = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 800),
     );
-    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic);
-    _slide = Tween<Offset>(
-      begin: const Offset(0, 0.06),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic));
+    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
     _entrance.forward();
-    _scrollController = ScrollController()..addListener(_onScroll);
-
-    AppSession.init().then((_) {
-      if (AppSession.profile != null) {
-        ProfileStore.save(AppSession.profile!);
-      } else {
-        ProfileStore.loadOrCreate();
-      }
+    _tabController = TabController(length: 5, vsync: this);
+    _buildSlides();
+    _loadPrefsThenLoad();
+    _startPolling();
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text.toLowerCase());
     });
+  }
 
-    _refreshWeather();
-    _refreshNews();
-    _refreshStories();
-    _weatherTimer = Timer.periodic(
-      const Duration(minutes: 15),
-      (_) => _refreshWeather(),
-    );
-    _newsTimer = Timer.periodic(
-      const Duration(minutes: 10),
-      (_) => _refreshNews(),
-    );
-    _storyTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) => _refreshStories(),
+  Future<void> _loadPrefsThenLoad() async {
+    final prefs = await SharedPreferences.getInstance();
+    _weatherCityIndex = (prefs.getInt(AppConfig.prefWeatherCity) ?? 0)
+        .clamp(0, kCityPresets.length - 1);
+    _prayerCityIndex = (prefs.getInt(AppConfig.prefPrayerCity) ?? 0)
+        .clamp(0, kCityPresets.length - 1);
+    if (!mounted) return;
+    setState(() {});
+    await _load();
+    _loadWeather();
+    _loadPrayer();
+  }
+
+  void _buildSlides() {
+    _slides = const <CarouselSlide>[
+      CarouselSlide(
+        code: 'ACT-01',
+        badge: 'FEATURED',
+        title: 'NEKOCRASH PRO',
+        subtitle:
+            'Buka semua modul premium dalam satu dashboard yang powerful.',
+        cta: 'JELAJAHI',
+        icon: Icons.workspace_premium_rounded,
+        accent: Palette.pink,
+        accent2: Palette.violetDeep,
+      ),
+      CarouselSlide(
+        code: 'ACT-02',
+        badge: 'TERMINAL',
+        title: 'GUIDE TERMUX',
+        subtitle: 'Panduan lengkap setup termux dari nol sampai siap pakai.',
+        cta: 'BUKA',
+        icon: Icons.terminal_rounded,
+        accent: Palette.cyan,
+        accent2: Palette.cyanDeep,
+      ),
+      CarouselSlide(
+        code: 'ACT-03',
+        badge: 'SERVER',
+        title: 'GUIDE VPS',
+        subtitle: 'Deploy server produksi dengan aman, cepat, dan stabil.',
+        cta: 'MULAI',
+        icon: Icons.cloud_rounded,
+        accent: Palette.coral,
+        accent2: Palette.pink,
+      ),
+      CarouselSlide(
+        code: 'ACT-04',
+        badge: 'KOMUNITAS',
+        title: 'SYAMGRAM HUB',
+        subtitle:
+            'Terhubung dengan pengguna aktif lainnya di seluruh jaringan.',
+        cta: 'GABUNG',
+        icon: Icons.hub_rounded,
+        accent: Palette.mint,
+        accent2: Palette.cyanDeep,
+      ),
+      CarouselSlide(
+        code: 'ACT-05',
+        badge: 'UPDATE',
+        title: 'VERSI 2.5',
+        subtitle:
+            'UI baru, performa lebih cepat, dan fitur-fitur baru telah hadir.',
+        cta: 'LIHAT',
+        icon: Icons.auto_awesome_rounded,
+        accent: Palette.amber,
+        accent2: Palette.violet,
+      ),
+    ];
+  }
+
+  void _startPolling() {
+    _poll?.cancel();
+    _poll = Timer.periodic(AppConfig.pollInterval, (_) {
+      _refreshRealtime();
+    });
+    _weatherTimer?.cancel();
+    _weatherTimer = Timer.periodic(AppConfig.weatherInterval, (_) {
+      _loadWeather();
+    });
+    _prayerTimer?.cancel();
+    _prayerTimer = Timer.periodic(AppConfig.prayerInterval, (_) {
+      _loadPrayer();
+    });
+  }
+
+  Future<void> _loadWeather() async {
+    if (mounted) setState(() => _weatherLoading = true);
+    final city = kCityPresets[_weatherCityIndex];
+    final data = await _weatherSvc.fetch(lat: city.lat, lon: city.lon);
+    if (!mounted) return;
+    setState(() {
+      _weather = WeatherData(
+        temperature: data.temperature,
+        windSpeed: data.windSpeed,
+        weatherCode: data.weatherCode,
+        isDay: data.isDay,
+        location: city.name,
+        updatedAt: data.updatedAt,
+      );
+      _weatherLoading = false;
+    });
+  }
+
+  Future<void> _loadPrayer() async {
+    if (mounted) setState(() => _prayerLoading = true);
+    final city = kCityPresets[_prayerCityIndex];
+    final data = await _prayerSvc.fetch(city: city.name, country: city.country);
+    if (!mounted) return;
+    setState(() {
+      _prayer = data;
+      _prayerLoading = false;
+    });
+  }
+
+  Future<void> _changeWeatherCity(int index) async {
+    if (index < 0 || index >= kCityPresets.length) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(AppConfig.prefWeatherCity, index);
+    if (!mounted) return;
+    setState(() => _weatherCityIndex = index);
+    await _loadWeather();
+  }
+
+  Future<void> _changePrayerCity(int index) async {
+    if (index < 0 || index >= kCityPresets.length) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(AppConfig.prefPrayerCity, index);
+    if (!mounted) return;
+    setState(() => _prayerCityIndex = index);
+    await _loadPrayer();
+  }
+
+  Future<void> _showWeatherCityPicker() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => LocationSettingsSheet(
+        title: 'UBAH LOKASI CUACA',
+        selectedIndex: _weatherCityIndex,
+        onSelect: (i) async {
+          Navigator.pop(context);
+          await _changeWeatherCity(i);
+        },
+      ),
     );
   }
 
-  void _onScroll() {
-    if (!_scrollController.hasClients) return;
-    final max = _scrollController.position.maxScrollExtent;
-    final current = _scrollController.offset;
-    final progress = max <= 0 ? 0.0 : (current / max).clamp(0.0, 1.0);
-    final showTop = current > 400;
-    if ((progress - _scrollProgress).abs() > 0.005 ||
-        showTop != _showScrollTop) {
+  Future<void> _showPrayerCityPicker() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => LocationSettingsSheet(
+        title: 'UBAH WILAYAH SHOLAT',
+        selectedIndex: _prayerCityIndex,
+        onSelect: (i) async {
+          Navigator.pop(context);
+          await _changePrayerCity(i);
+        },
+      ),
+    );
+  }
+
+  Future<void> _refreshRealtime({bool reloadUsers = false}) async {
+    if (_refreshing) return;
+    _refreshing = true;
+    try {
+      if (reloadUsers || _backendUsers.isEmpty) {
+        final users = await _usersSvc.fetchUsers();
+        if (!mounted) return;
+        if (users.isNotEmpty) {
+          setState(() {
+            _backendUsers = users;
+            _backendAvailable = true;
+          });
+        }
+      }
+
+      final live = await _fb.liveStatus();
+      final liveAvailable = live['available'] == true;
+      final liveOnline = live['online'] == true;
+      if (!mounted) return;
+
+      _backendAvailable = liveAvailable;
+
+      if (!liveAvailable) {
+        setState(() {
+          _backend = _backendAvailable
+              ? BackendState.backendOnly
+              : BackendState.offline;
+          _status = _backendAvailable ? 'BACKEND' : 'OFFLINE';
+          _stats = DashboardStats(
+            online: _backendUsers.where((u) => u.isActive).length,
+            sessions: 0,
+            total: _backendUsers.length,
+            uptimeSeconds: 0,
+            cpu: 0,
+            ram: 0,
+            disk: 0,
+            status: 'BACKEND',
+          );
+          _network = NetworkSnapshot.empty();
+          _lastUpdate = DateTime.now();
+        });
+        return;
+      }
+
+      final social = await Future.wait<dynamic>([
+        _fb.chats(),
+        _fb.fetchStories(),
+        _fb.activityLogs(),
+      ]);
+      if (!mounted) return;
+
+      final chats = social[0] as List<ChatMsg>;
+      final stories = social[1] as List<SyamStory>;
+      final logs = social[2] as List<LogEntry>;
+
+      final notifs = chats
+          .take(30)
+          .map((c) => NotifItem(
+                icon: Icons.chat_bubble_rounded,
+                title: c.sender.toUpperCase(),
+                body: c.message,
+                color: Palette.violet,
+              ))
+          .toList();
+
+      unreadNotifier.value = notifs.length;
+
+      if (!liveOnline) {
+        setState(() {
+          _backend = BackendState.backendOnly;
+          _status = _backendAvailable ? 'BACKEND' : 'OFFLINE';
+          _stats = DashboardStats(
+            online: _backendUsers.where((u) => u.isActive).length,
+            sessions: 0,
+            total: _backendUsers.length,
+            uptimeSeconds: 0,
+            cpu: 0,
+            ram: 0,
+            disk: 0,
+            status: 'BACKEND',
+          );
+          _chats = chats;
+          _stories = stories;
+          _logs = logs;
+          _notifs = notifs;
+          _network = NetworkSnapshot.empty();
+          _lastUpdate = DateTime.now();
+        });
+        return;
+      }
+
+      final online = (live['onlineCount'] as int?) ?? 0;
+      final sessions = (live['sessions'] as int?) ?? 0;
+      final uptime = (live['uptimeSeconds'] as int?) ?? 0;
+
       setState(() {
-        _scrollProgress = progress;
-        _showScrollTop = showTop;
+        _backend = BackendState.online;
+        _status = 'ONLINE';
+        _stats = DashboardStats(
+          online: online,
+          sessions: sessions,
+          total: online + sessions,
+          uptimeSeconds: uptime,
+          cpu: (live['cpu'] as double?) ?? 0,
+          ram: (live['ram'] as double?) ?? 0,
+          disk: (live['disk'] as double?) ?? 0,
+          status: 'ONLINE',
+        );
+        _chats = chats;
+        _stories = stories;
+        _logs = logs;
+        _notifs = notifs;
+        _network = _fb.networkSnapshotFromLive(live);
+        _lastUpdate = DateTime.now();
       });
+    } finally {
+      _refreshing = false;
     }
   }
 
-  @override
-  void dispose() {
-    _weatherTimer?.cancel();
-    _newsTimer?.cancel();
-    _storyTimer?.cancel();
-    _scrollController.dispose();
-    _entrance.dispose();
-    super.dispose();
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+
+    final users = await _usersSvc.fetchUsers();
+    if (!mounted) return;
+
+    final currentUser = await _fb.me();
+    if (!mounted) return;
+
+    setState(() {
+      _backendUsers = users;
+      _backendAvailable = users.isNotEmpty;
+      _user = (currentUser != null && currentUser.isActive)
+          ? currentUser
+          : _user;
+      _loading = false;
+      if (users.isNotEmpty) {
+        _backend = BackendState.backendOnly;
+        _status = 'BACKEND';
+        _stats = DashboardStats(
+          online: users.where((u) => u.isActive).length,
+          sessions: 0,
+          total: users.length,
+          uptimeSeconds: 0,
+          cpu: 0,
+          ram: 0,
+          disk: 0,
+          status: 'BACKEND',
+        );
+      }
+    });
+
+    if (users.isNotEmpty) {
+      final merged = <String, AppUser>{};
+      for (final u in users) {
+        merged[u.username.toLowerCase()] = u;
+      }
+      final result = merged.values.toList()
+        ..sort((a, b) =>
+            a.username.toLowerCase().compareTo(b.username.toLowerCase()));
+      setState(() => _allUsers = result);
+    } else {
+      setState(() => _allUsers = _backendUsers);
+    }
+
+    await _refreshRealtime();
+
+    if (!_loginLogged && _user.username != 'guest' && _backendAvailable) {
+      _loginLogged = true;
+      await _fb.writeLoginHistory(
+        username: _user.username,
+        success: true,
+      );
+    }
   }
+
+  List<AppUser> get _filteredUsers {
+    final source = _backendUsers.isNotEmpty ? _backendUsers : _allUsers;
+    var list = source.where((u) {
+      if (_roleFilter != 'all' && u.role.toLowerCase() != _roleFilter) {
+        return false;
+      }
+      if (_searchQuery.isNotEmpty &&
+          !u.username.toLowerCase().contains(_searchQuery)) {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    switch (_sortMode) {
+      case UserSort.name:
+        list.sort((a, b) => a.username.compareTo(b.username));
+        break;
+      case UserSort.role:
+        list.sort((a, b) => a.role.compareTo(b.role));
+        break;
+      case UserSort.status:
+        list.sort((a, b) =>
+            (b.isActive ? 1 : 0).compareTo(a.isActive ? 1 : 0));
+        break;
+      case UserSort.expiry:
+        list.sort((a, b) => a.expired.compareTo(b.expired));
+        break;
+    }
+    return list;
+  }
+
+  void _openMenu() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const MenuScreen()),
+    );
+  }
+
+  void _openRat() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const RatScreen()),
+    );
+  }
+
+  void _openChat() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ChatScreen()),
+    );
+  }
+
+  void _openRoomChat() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const RoomChatScreen()),
+    );
+  }
+
+  void _openTools() => _showGuideChooser();
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<Color>(
-      valueListenable: accentNotifier,
-      builder: (_, accent, __) {
-        return Scaffold(
-          extendBody: true,
-          backgroundColor: Colors.transparent,
-          floatingActionButton: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
+    _screenSize = MediaQuery.sizeOf(context);
+
+    final items = <NavItem>[
+      const NavItem(
+        icon: Icons.home_outlined,
+        active: Icons.home_rounded,
+        label: 'HOME',
+        color: Palette.violet,
+      ),
+      const NavItem(
+        icon: Icons.grid_view_outlined,
+        active: Icons.grid_view_rounded,
+        label: 'MENU',
+        color: Palette.pink,
+      ),
+      const NavItem(
+        icon: Icons.forum_outlined,
+        active: Icons.forum_rounded,
+        label: 'ROOM',
+        color: Palette.cyan,
+      ),
+      const NavItem(
+        icon: Icons.build_outlined,
+        active: Icons.build_rounded,
+        label: 'TOOLS',
+        color: Palette.mint,
+      ),
+    ];
+
+    return Scaffold(
+      extendBody: true,
+      backgroundColor: Palette.bg0,
+      body: CosmicBackground(
+        child: SafeArea(
+          bottom: false,
+          child: Stack(
             children: [
-              AnimatedOpacity(
-                duration: T.normal,
-                opacity: _showScrollTop ? 1 : 0,
-                child: IgnorePointer(
-                  ignoring: !_showScrollTop,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: S.md),
-                    child: Tap(
-                      onTap: () {
-                        _scrollController.animateTo(
-                          0,
-                          duration: const Duration(milliseconds: 600),
-                          curve: Curves.easeOutCubic,
-                        );
-                      },
-                      child: _miniFab(
-                          icon: Icons.keyboard_arrow_up_rounded,
-                          color: accent),
-                    ),
-                  ),
-                ),
+              FadeTransition(
+                opacity: _fade,
+                child: _buildDashboard(),
               ),
-              Tap(
-                onTap: _showCommandPalette,
-                child: _mainFab(accent),
+              ChibiCompanion(
+                screenSize: _screenSize,
+                isDay: _weather.isDay,
+                isOnline: _backend == BackendState.online,
+                initialPosition: Offset(
+                  _screenSize.width - 140,
+                  _screenSize.height * 0.52,
+                ),
+                onTap: _openChat,
+                onLongPress: () => _showChibiMenu(),
               ),
             ],
           ),
-          body: Star(
-            child: SafeArea(
-              bottom: false,
-              child: Stack(
-                children: [
-                  FadeTransition(
-                    opacity: _fade,
-                    child: SlideTransition(
-                      position: _slide,
-                      child: ListView(
-                        controller: _scrollController,
-                        physics: const BouncingScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(
-                            S.lg, S.lg, S.lg, 180),
-                        children: [
-                          _topBar(accent),
-                          const SizedBox(height: S.md),
-                          _marquee(),
-                          const SizedBox(height: S.xl),
-                          _greeting(accent),
-                          const SizedBox(height: S.lg),
-                          WeatherCard(
-                            data: _weatherData,
-                            loading: _weatherLoading,
-                            error: _weatherError,
-                            onRefresh: _refreshWeather,
-                          ),
-                          const SizedBox(height: S.lg),
-                          const PulseStrip(),
-                          const SizedBox(height: S.xl),
-                          _userPanel(),
-                          const SizedBox(height: S.xxl),
-                          SectionTitle(
-                            title: 'STORY/STATUS',
-                            subtitle: 'UPDATE TERBARU KOMUNITAS',
-                            icon: Icons.auto_awesome_rounded,
-                            accent: accent,
-                            trailing: 'SEMUA',
-                            onTrailing: _refreshStories,
-                          ),
-                          const SizedBox(height: S.lg),
-                          _storyStrip(),
-                          const SizedBox(height: S.xxl),
-                          SectionTitle(
-                            title: 'NEKOVERSE',
-                            subtitle: 'MODUL & FITUR',
-                            icon: Icons.warning_rounded,
-                            accent: accent,
-                            trailing: '${_tools.length} MENU',
-                            onTrailing: () {},
-                          ),
-                          const SizedBox(height: S.lg),
-                          ToolCarousel(
-                            tools: _tools,
-                            onToolTap: _handleCarouselTool,
-                          ),
-                          const SizedBox(height: S.xxl),
-                          SectionTitle(
-                            title: 'NEWS',
-                            subtitle: 'BERITA TERBARU',
-                            icon: Icons.newspaper_rounded,
-                            accent: P.rust,
-                            trailing: 'REFRESH',
-                            onTrailing: _refreshNews,
-                          ),
-                          const SizedBox(height: S.lg),
-                          NewsCarousel(
-                            items: _news,
-                            loading: _newsLoading,
-                            error: _newsError,
-                            onRetry: _refreshNews,
-                          ),
-                          const SizedBox(height: S.xxl),
-                          SectionTitle(
-                            title: 'TOOLS',
-                            subtitle: 'PUSAT KONTROL',
-                            icon: Icons.public_rounded,
-                            accent: accent,
-                            trailing: '${_orbitalItems.length} MENU',
-                            onTrailing: () {},
-                          ),
-                          const SizedBox(height: S.lg),
-                          OrbitalMenu(
-                            items: _orbitalItems,
-                            height: 380,
-                          ),
-                          const SizedBox(height: S.md),
-                          _orbitalHint(),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    right: 4,
-                    top: 0,
-                    bottom: 0,
-                    width: 3,
-                    child: IgnorePointer(
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: FractionallySizedBox(
-                          heightFactor: _scrollProgress.clamp(0.02, 1.0),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  accent.withOpacity(0.9),
-                                  accent.withOpacity(0.2),
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          bottomNavigationBar: NavBar(
-            index: _navIndex,
-            onTap: _handleNavTap,
-            onCenterTap: _openRat,
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _mainFab(Color accent) {
-    return Container(
-      width: 60,
-      height: 60,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [accent, P.bloodDeep, P.violetDeep],
-          stops: const [0.0, 0.5, 1.0],
         ),
-        border: Border.all(color: Colors.white.withOpacity(0.25), width: 1.4),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withOpacity(0.65),
-            blurRadius: 30,
-            spreadRadius: 1,
+      ),
+      bottomNavigationBar: FloatingGlassNavBar(
+        index: 0,
+        items: items,
+        onTap: (i) {
+          switch (i) {
+            case 0:
+              return;
+            case 1:
+              _openMenu();
+              return;
+            case 2:
+              _openRoomChat();
+              return;
+            case 3:
+              _openTools();
+              return;
+          }
+        },
+        onCenterTap: _openRat,
+      ),
+    );
+  }
+
+  void _showChibiMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        margin: const EdgeInsets.all(Spc.lg),
+        padding: const EdgeInsets.all(Spc.xl),
+        decoration: BoxDecoration(
+          color: Palette.surface,
+          borderRadius: BorderRadius.circular(Radii.xl),
+          border: Border.all(
+            color: Palette.cyan.withValues(alpha: 0.4),
+            width: 1.2,
           ),
-        ],
-      ),
-      child: const Center(
-        child: Icon(Icons.terminal_rounded, color: Colors.white, size: 26),
-      ),
-    );
-  }
-
-  Widget _miniFab({required IconData icon, required Color color}) {
-    return Container(
-      width: 46,
-      height: 46,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: P.bgElevated.withOpacity(0.95),
-        border: Border.all(color: color.withOpacity(0.55), width: 1.4),
-      ),
-      child: Icon(icon, color: color, size: 22),
-    );
-  }
-
-  Widget _topBar(Color accent) {
-    return ValueListenableBuilder<UserProfile?>(
-      valueListenable: ProfileStore.notifier,
-      builder: (_, profile, __) {
-        final hasAvatar = profile != null && profile.avatarPath.isNotEmpty;
-        return Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(R.lg),
-                boxShadow: [
-                  BoxShadow(
-                    color: accent.withOpacity(0.7),
-                    blurRadius: 28,
-                    spreadRadius: -2,
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(R.lg),
-                child: Image.asset(
-                  Cfg.logoPage,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [accent, P.bloodDeep],
-                      ),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        'N',
-                        style: TextStyle(
-                          fontFamily: Cfg.vampireFont,
-                          fontSize: 34,
-                          color: P.bone,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                  ),
+          boxShadow: [
+            BoxShadow(
+              color: Palette.cyan.withValues(alpha: 0.2),
+              blurRadius: 30,
+              spreadRadius: -6,
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Palette.border,
+                  borderRadius: BorderRadius.circular(4),
                 ),
               ),
-            ),
-            const SizedBox(width: S.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: Spc.lg),
+              Row(
                 children: [
-                  const Text(
-                    'NekoVerse',
-                    style: TextStyle(
-                      fontFamily: Cfg.vampireFont,
-                      fontSize: 28,
-                      color: P.bone,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.6,
-                      height: 1.0,
-                      shadows: [
-                        Shadow(color: P.crimson, blurRadius: 16),
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [Palette.cyan, Palette.violet],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Palette.cyan.withValues(alpha: 0.5),
+                          blurRadius: 16,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.auto_awesome_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: Spc.md),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CHIBI ASSIST',
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            color: Palette.text,
+                            letterSpacing: 1.6,
+                          ),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          'PILIH AKSI CEPAT',
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w900,
+                            color: Palette.text3,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 5),
-                  Row(
-                    children: [
-                      SignalBars(color: accent, height: 12, barCount: 4),
-                      const SizedBox(width: 8),
-                      Text(
-                        (_weatherData != null || _news.isNotEmpty)
-                            ? 'LIVE'
-                            : 'CONNECTING',
-                        style: TextStyle(
-                          fontFamily: Cfg.bugFont,
-                          fontSize: 8.5,
-                          fontWeight: FontWeight.w900,
-                          color: accent,
-                          letterSpacing: 1.4,
-                        ),
-                      ),
-                    ],
+                ],
+              ),
+              const SizedBox(height: Spc.lg),
+              Row(
+                children: [
+                  Expanded(
+                    child: _chibiAction(
+                      icon: Icons.auto_awesome_rounded,
+                      label: 'CHAT',
+                      color: Palette.cyan,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _openChat();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Spc.sm),
+                  Expanded(
+                    child: _chibiAction(
+                      icon: Icons.bolt_rounded,
+                      label: 'RAT HUB',
+                      color: Palette.coral,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _openRat();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Spc.sm),
+                  Expanded(
+                    child: _chibiAction(
+                      icon: Icons.forum_rounded,
+                      label: 'ROOM',
+                      color: Palette.amber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _openRoomChat();
+                      },
+                    ),
                   ),
                 ],
               ),
-            ),
-            CircleBubble(
-              icon: Icons.palette_rounded,
-              color: accent,
-              onTap: () {
-                showModalBottomSheet<void>(
-                  context: context,
-                  backgroundColor: Colors.transparent,
-                  isScrollControlled: true,
-                  builder: (_) => const AccentPickerSheet(),
-                );
-              },
-            ),
-            const SizedBox(width: S.sm),
-            CircleBubble(
-              icon: Icons.settings_rounded,
-              color: P.violet,
-              onTap: _openSetting,
-              image: hasAvatar
-                  ? Image.file(
-                      File(profile.avatarPath),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                    )
-                  : null,
-            ),
-          ],
-        );
-      },
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _marquee() {
-    return const Marquee(
-      items: [
-        'NekoVerse',
-        'New Update',
-        'Secure Backend',
-        'Live Pulse Monitor',
-        'Thank For Buyer',
-        'And Seller 👋',
+  Widget _chibiAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return TapScale(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          vertical: Spc.md,
+          horizontal: Spc.sm,
+        ),
+        decoration: BoxDecoration(
+          color: Palette.surfaceAlt,
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 8.5,
+                fontWeight: FontWeight.w900,
+                color: color,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDashboard() {
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: Palette.violet,
+      backgroundColor: Palette.surface,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: BouncingScrollPhysics(),
+        ),
+        padding: const EdgeInsets.fromLTRB(Spc.lg, Spc.lg, Spc.lg, 200),
+        children: [
+          _topBar(),
+          const SizedBox(height: Spc.lg),
+          _greetingHeader(),
+          const SizedBox(height: Spc.lg),
+          WeatherWidget(
+            weather: _weather,
+            loading: _weatherLoading,
+            city: kCityPresets[_weatherCityIndex].name,
+            onSettings: _showWeatherCityPicker,
+          ),
+          const SizedBox(height: Spc.md),
+          PrayerTimesWidget(
+            prayer: _prayer,
+            loading: _prayerLoading,
+            city: kCityPresets[_prayerCityIndex].name,
+            onSettings: _showPrayerCityPicker,
+          ),
+          const SizedBox(height: Spc.lg),
+          _searchBar(),
+          const SizedBox(height: Spc.lg),
+          _monitorStrip(),
+          const SizedBox(height: Spc.md),
+          _overlayMenuButton(),
+          const SizedBox(height: Spc.lg),
+          if (_backend != BackendState.online) ...[
+            _backendBanner(),
+            const SizedBox(height: Spc.lg),
+          ],
+          if (_loading)
+            _skeleton()
+          else ...[
+            FullScreenCarousel(
+              slides: _slides,
+              onTap: _handleCarouselTap,
+            ),
+            const SizedBox(height: Spc.xl),
+            SectionHeader(
+              title: 'AKSES MODUL',
+              accent: Palette.plasma,
+              icon: Icons.security_rounded,
+              trailing: 'SECURE',
+              trailingColor: Palette.plasma,
+            ),
+            const SizedBox(height: Spc.md),
+            _modulesGrid(),
+            const SizedBox(height: Spc.xl),
+            SectionHeader(
+              title: 'INFORMASI PENGGUNA',
+              accent: Palette.pink,
+              trailing: _user.isActive ? 'AKTIF' : 'NONAKTIF',
+              trailingColor: _user.isActive ? Palette.mint : Palette.coral,
+            ),
+            const SizedBox(height: Spc.md),
+            UserInfoPanel(user: _user, status: _status),
+            const SizedBox(height: Spc.xl),
+            PremiumTabBar(
+              controller: _tabController,
+              tabs: const [
+                SectionTabData(
+                  label: 'MENU',
+                  icon: Icons.dashboard_rounded,
+                  color: Palette.violet,
+                ),
+                SectionTabData(
+                  label: 'SYAMGRAM',
+                  icon: Icons.camera_rounded,
+                  color: Palette.pink,
+                ),
+                SectionTabData(
+                  label: 'CREATE',
+                  icon: Icons.people_alt_rounded,
+                  color: Palette.cyan,
+                ),
+                SectionTabData(
+                  label: 'NOTIF',
+                  icon: Icons.notifications_rounded,
+                  color: Palette.mint,
+                ),
+                SectionTabData(
+                  label: 'AKTIVITAS',
+                  icon: Icons.receipt_long_rounded,
+                  color: Palette.amber,
+                ),
+              ],
+            ),
+            const SizedBox(height: Spc.lg),
+            AnimatedBuilder(
+              animation: _tabController,
+              builder: (_, __) {
+                switch (_tabController.index) {
+                  case 0:
+                    return _overviewTab();
+                  case 1:
+                    return _syamgramTab();
+                  case 2:
+                    return _usersTab();
+                  case 3:
+                    return _transmissionTab();
+                  case 4:
+                    return _logsTab();
+                  default:
+                    return _overviewTab();
+                }
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _modulesGrid() {
+    final modules = <_ModuleData>[
+      _ModuleData(
+        'RAT HUB',
+        'Remote Access Toolkit',
+        Icons.bolt_rounded,
+        Palette.coral,
+        Palette.blood,
+        onTap: _openRat,
+      ),
+      _ModuleData(
+        'BUG PANEL',
+        'Exploit & Payload',
+        Icons.bug_report_rounded,
+        Palette.danger,
+        Palette.plasma,
+        onTap: _openRat,
+      ),
+      _ModuleData(
+        'TOOLS',
+        'Utility & Recon',
+        Icons.build_rounded,
+        Palette.violet,
+        Palette.violetDeep,
+        onTap: _openTools,
+      ),
+      _ModuleData(
+        'SESSION',
+        'Active Monitor',
+        Icons.sensors_rounded,
+        Palette.mint,
+        Palette.teal,
+        onTap: _openRat,
+      ),
+    ];
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _moduleCard(modules[0])),
+            const SizedBox(width: Spc.md),
+            Expanded(child: _moduleCard(modules[1])),
+          ],
+        ),
+        const SizedBox(height: Spc.md),
+        Row(
+          children: [
+            Expanded(child: _moduleCard(modules[2])),
+            const SizedBox(width: Spc.md),
+            Expanded(child: _moduleCard(modules[3])),
+          ],
+        ),
       ],
     );
   }
 
-  Widget _greeting(Color accent) {
-    final hour = DateTime.now().hour;
-    String greet;
-    IconData icon;
-    Color color;
-    if (hour < 5) {
-      greet = 'SELAMAT DINI HARI';
-      icon = Icons.visibility_rounded;
-      color = P.crimson;
-    } else if (hour < 12) {
-      greet = 'SELAMAT PAGI';
-      icon = Icons.wb_twilight_rounded;
-      color = P.amber;
-    } else if (hour < 15) {
-      greet = 'SELAMAT SIANG';
-      icon = Icons.wb_sunny_rounded;
-      color = P.orange;
-    } else if (hour < 18) {
-      greet = 'SELAMAT SORE';
-      icon = Icons.wb_twilight_rounded;
-      color = P.rust;
-    } else {
-      greet = 'SELAMAT MALAM';
-      icon = Icons.nightlight_round;
-      color = P.violet;
+  Widget _moduleCard(_ModuleData data) {
+    return TapScale(
+      onTap: data.onTap,
+      child: Container(
+        padding: const EdgeInsets.all(Spc.md),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              data.color.withValues(alpha: 0.24),
+              data.color2.withValues(alpha: 0.08),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(
+            color: data.color.withValues(alpha: 0.42),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: data.color.withValues(alpha: 0.22),
+              blurRadius: 20,
+              spreadRadius: -4,
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [data.color, data.color2],
+                ),
+                borderRadius: BorderRadius.circular(Radii.sm),
+                boxShadow: [
+                  BoxShadow(
+                    color: data.color.withValues(alpha: 0.6),
+                    blurRadius: 16,
+                  ),
+                ],
+              ),
+              child: Icon(data.icon, color: Colors.white, size: 20),
+            ),
+            const SizedBox(height: Spc.md),
+            Text(
+              data.title,
+              style: const TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: Palette.text,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              data.subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+                color: Palette.text3,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _backendBanner() {
+    final onlyBackend = _backend == BackendState.backendOnly;
+    final color = onlyBackend ? Palette.amber : Palette.coral;
+    final icon =
+        onlyBackend ? Icons.cloud_off_rounded : Icons.wifi_off_rounded;
+    final title =
+        onlyBackend ? 'BACKEND OFFLINE — MODE BACKEND' : 'TIDAK ADA KONEKSI';
+    final subtitle = onlyBackend
+        ? 'Data pengguna aktif dari Backend. Fitur realtime dinonaktifkan sementara.'
+        : 'Cek koneksi internet kamu. Beberapa fitur butuh jaringan.';
+
+    return GlassPanel(
+      padding: const EdgeInsets.all(Spc.md),
+      borderColor: color.withValues(alpha: 0.4),
+      tint: color.withValues(alpha: 0.08),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(Radii.sm),
+              border: Border.all(color: color.withValues(alpha: 0.4)),
+            ),
+            child: Icon(icon, color: color, size: 18),
+          ),
+          const SizedBox(width: Spc.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 8.5,
+                    color: Palette.text2,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleCarouselTap(CarouselSlide slide) {
+    switch (slide.title) {
+      case 'GUIDE TERMUX':
+        _showGuide(
+          title: 'GUIDE TERMUX',
+          accent: Palette.cyan,
+          steps: const [
+            'Update package manager dan cek versi Termux.',
+            'Pasang runtime/tool yang dibutuhkan project.',
+            'Clone atau salin project ke folder kerja.',
+            'Jalankan dependency install lalu start project.',
+          ],
+        );
+        break;
+      case 'GUIDE VPS':
+        _showGuide(
+          title: 'GUIDE VPS',
+          accent: Palette.coral,
+          steps: const [
+            'Siapkan VPS dan user kerja non-root.',
+            'Install runtime sesuai stack aplikasi.',
+            'Jalankan service menggunakan process manager.',
+            'Hubungkan heartbeat status dan monitoring backend.',
+          ],
+        );
+        break;
+      case 'SYAMGRAM HUB':
+        _tabController.animateTo(1);
+        break;
+      default:
+        _showSnack('${slide.title} SIAP DIGUNAKAN');
+    }
+  }
+
+  Future<Map<String, dynamic>> _readOverlayConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    return <String, dynamic>{
+      'overlay_enabled': prefs.getBool(AppConfig.prefOverlayEnabled) ?? true,
+      'panel_enabled': prefs.getBool(AppConfig.prefOverlayPanel) ?? true,
+      'dashboard_enabled':
+          prefs.getBool(AppConfig.prefOverlayDashboard) ?? true,
+      'bug_enabled': prefs.getBool(AppConfig.prefOverlayBug) ?? true,
+      'chat_enabled': prefs.getBool(AppConfig.prefOverlayChat) ?? true,
+      'scale': (prefs.getDouble('overlay_scale') ?? 1.0).clamp(0.75, 1.35),
+    };
+  }
+
+  Future<void> _pushOverlayConfig(Map<String, dynamic> config) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(
+      AppConfig.prefOverlayEnabled,
+      config['overlay_enabled'] == true,
+    );
+    await prefs.setBool(
+      AppConfig.prefOverlayPanel,
+      config['panel_enabled'] == true,
+    );
+    await prefs.setBool(
+      AppConfig.prefOverlayDashboard,
+      config['dashboard_enabled'] == true,
+    );
+    await prefs.setBool(
+      AppConfig.prefOverlayBug,
+      config['bug_enabled'] == true,
+    );
+    await prefs.setBool(
+      AppConfig.prefOverlayChat,
+      config['chat_enabled'] == true,
+    );
+    if (config['scale'] is num) {
+      await prefs.setDouble(
+        'overlay_scale',
+        (config['scale'] as num).toDouble().clamp(0.75, 1.35),
+      );
     }
 
+    final enabled = config['overlay_enabled'] == true;
+    if (!enabled) {
+      try {
+        if (await FlutterOverlayWindow.isActive()) {
+          await FlutterOverlayWindow.closeOverlay();
+        }
+      } catch (e) {
+        debugPrint('OVERLAY OFF ERROR: $e');
+      }
+      return;
+    }
+
+    try {
+      final granted = await FlutterOverlayWindow.isPermissionGranted();
+      if (granted != true) {
+        final result = await FlutterOverlayWindow.requestPermission();
+        if (result != true) {
+          return;
+        }
+      }
+
+      final active = await FlutterOverlayWindow.isActive();
+      if (!active) {
+        await FlutterOverlayWindow.showOverlay(
+          height: 64,
+          width: 64,
+          alignment: OverlayAlignment.centerRight,
+          visibility: NotificationVisibility.visibilitySecret,
+          positionGravity: PositionGravity.none,
+          enableDrag: false,
+          flag: OverlayFlag.defaultFlag,
+          overlayTitle: 'Neko Assist',
+          overlayContent: 'Bubble aktif',
+        );
+      }
+
+      final sessionUser =
+          prefs.getString('session_username') ?? _user.username;
+      final sessionRole = prefs.getString('session_role') ?? _user.role;
+      final sessionExpired =
+          prefs.getString('session_expired') ?? _user.expired;
+
+      await FlutterOverlayWindow.shareData(jsonEncode({
+        'type': 'settings',
+        'overlay_enabled': true,
+        'username': sessionUser,
+        'role': sessionRole,
+        'expired': sessionExpired,
+        ...config,
+      }));
+    } catch (e, st) {
+      debugPrint('OVERLAY APPLY ERROR: $e');
+      debugPrint('$st');
+    }
+  }
+
+  Future<void> _showOverlayMenu() async {
+    HapticFeedback.mediumImpact();
+    final initial = await _readOverlayConfig();
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        bool overlayEnabled = initial['overlay_enabled'] == true;
+        bool panelEnabled = initial['panel_enabled'] == true;
+        bool dashboardEnabled = initial['dashboard_enabled'] == true;
+        bool bugEnabled = initial['bug_enabled'] == true;
+        bool chatEnabled = initial['chat_enabled'] == true;
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            Future<void> update({
+              bool? overlay,
+              bool? panel,
+              bool? dashboard,
+              bool? bug,
+              bool? chat,
+            }) async {
+              setSheetState(() {
+                if (overlay != null) overlayEnabled = overlay;
+                if (panel != null) panelEnabled = panel;
+                if (dashboard != null) dashboardEnabled = dashboard;
+                if (bug != null) bugEnabled = bug;
+                if (chat != null) chatEnabled = chat;
+              });
+
+              await _pushOverlayConfig({
+                'overlay_enabled': overlayEnabled,
+                'panel_enabled': panelEnabled,
+                'dashboard_enabled': dashboardEnabled,
+                'bug_enabled': bugEnabled,
+                'chat_enabled': chatEnabled,
+                'scale': initial['scale'],
+              });
+            }
+
+            return SafeArea(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                decoration: BoxDecoration(
+                  color: Palette.surface,
+                  borderRadius: BorderRadius.circular(Radii.xl),
+                  border: Border.all(
+                    color: Palette.violet.withValues(alpha: 0.42),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Palette.violet.withValues(alpha: 0.18),
+                      blurRadius: 30,
+                      spreadRadius: -8,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Palette.border,
+                        borderRadius: BorderRadius.circular(Radii.pill),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Palette.cyan, Palette.violet],
+                            ),
+                            borderRadius: BorderRadius.circular(Radii.md),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Palette.cyan.withValues(alpha: 0.28),
+                                blurRadius: 16,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.layers_rounded,
+                            color: Colors.white,
+                            size: 23,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'OVERLAY MENU',
+                                style: TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w900,
+                                  color: Palette.text,
+                                  letterSpacing: 1.4,
+                                ),
+                              ),
+                              SizedBox(height: 3),
+                              Text(
+                                'KONTROL BUBBLE DAN FITUR OVERLAY',
+                                style: TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: Palette.text3,
+                                  letterSpacing: 1.1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _overlaySwitchTile(
+                      icon: Icons.power_settings_new_rounded,
+                      title: 'OVERLAY',
+                      subtitle: 'Tampilkan atau sembunyikan bubble',
+                      color: Palette.mint,
+                      value: overlayEnabled,
+                      onChanged: (v) => update(overlay: v),
+                      emphasized: true,
+                    ),
+                    const SizedBox(height: 8),
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'FITUR OVERLAY',
+                        style: TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          color: Palette.text3,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    _overlaySwitchTile(
+                      icon: Icons.tune_rounded,
+                      title: 'PANEL',
+                      subtitle: 'Tampilkan Tools Panel pada bubble',
+                      color: Palette.pink,
+                      value: panelEnabled,
+                      enabled: overlayEnabled,
+                      onChanged: (v) => update(panel: v),
+                    ),
+                    const SizedBox(height: 6),
+                    _overlaySwitchTile(
+                      icon: Icons.home_rounded,
+                      title: 'DASHBOARD',
+                      subtitle: 'Akses dashboard dari overlay',
+                      color: Palette.cyan,
+                      value: dashboardEnabled,
+                      enabled: overlayEnabled,
+                      onChanged: (v) => update(dashboard: v),
+                    ),
+                    const SizedBox(height: 6),
+                    _overlaySwitchTile(
+                      icon: Icons.bug_report_rounded,
+                      title: 'BUG PANEL',
+                      subtitle: 'Tampilkan menu Bug Panel',
+                      color: Palette.coral,
+                      value: bugEnabled,
+                      enabled: overlayEnabled,
+                      onChanged: (v) => update(bug: v),
+                    ),
+                    const SizedBox(height: 6),
+                    _overlaySwitchTile(
+                      icon: Icons.build_circle_rounded,
+                      title: 'TOOLS PANEL',
+                      subtitle: 'Tampilkan menu Tools Panel',
+                      color: Palette.violet,
+                      value: panelEnabled,
+                      enabled: overlayEnabled,
+                      onChanged: (v) => update(panel: v),
+                    ),
+                    const SizedBox(height: 6),
+                    _overlaySwitchTile(
+                      icon: Icons.auto_awesome_rounded,
+                      title: 'CHAT',
+                      subtitle: 'Tampilkan akses Chat',
+                      color: Palette.amber,
+                      value: chatEnabled,
+                      enabled: overlayEnabled,
+                      onChanged: (v) => update(chat: v),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _overlaySwitchTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+    bool enabled = true,
+    bool emphasized = false,
+  }) {
+    return AnimatedOpacity(
+      duration: Timings.fast,
+      opacity: enabled ? 1 : 0.45,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: emphasized ? 0.10 : 0.06),
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(Radii.sm),
+              ),
+              child: Icon(icon, color: color, size: 17),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 7.5,
+                      color: Palette.text3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Switch.adaptive(
+              value: value,
+              onChanged: enabled ? onChanged : null,
+              activeColor: color,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _topBar() {
+    final online = _status == 'ONLINE';
+    final backend = _status == 'BACKEND';
+    final checking = _status == 'CHECKING';
+    final color = checking
+        ? Palette.amber
+        : online
+            ? Palette.mint
+            : backend
+                ? Palette.cyan
+                : Palette.coral;
     return Row(
+      children: [
+        AvatarCircle(user: _user, size: 46),
+        const SizedBox(width: Spc.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      _user.username.toUpperCase(),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.text,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  if (_user.isOwner)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Palette.gold.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(Radii.xs),
+                        border: Border.all(
+                          color: Palette.gold.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: const Text(
+                        'OWNER',
+                        style: TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          color: Palette.gold,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Row(
+                children: [
+                  HaloDot(color: color, size: 4),
+                  const SizedBox(width: 6),
+                  Text(
+                    checking
+                        ? 'CHECKING'
+                        : online
+                            ? 'ONLINE'
+                            : backend
+                                ? 'BACKEND ONLY'
+                                : 'OFFLINE',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: color,
+                      letterSpacing: 1.6,
+                    ),
+                  ),
+                  const SizedBox(width: Spc.sm),
+                  Container(
+                    width: 3,
+                    height: 3,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Palette.text3,
+                    ),
+                  ),
+                  const SizedBox(width: Spc.sm),
+                  const LiveClock(
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text3,
+                      letterSpacing: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        _notifButton(),
+        const SizedBox(width: Spc.sm),
+        _profileButton(),
+      ],
+    );
+  }
+
+  Widget _notifButton() {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        _showNotifs();
+      },
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Palette.surface.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(Radii.md),
+              border: Border.all(color: Palette.border, width: 1),
+            ),
+            child: const Icon(
+              Icons.notifications_rounded,
+              color: Palette.text,
+              size: 19,
+            ),
+          ),
+          if (_notifs.isNotEmpty)
+            Positioned(
+              right: -3,
+              top: -3,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 5,
+                  vertical: 1,
+                ),
+                constraints: const BoxConstraints(minWidth: 18),
+                decoration: BoxDecoration(
+                  color: Palette.coral,
+                  borderRadius: BorderRadius.circular(Radii.pill),
+                  border: Border.all(color: Palette.bg0, width: 1.5),
+                ),
+                child: Center(
+                  child: Text(
+                    _notifs.length > 99 ? '99+' : '${_notifs.length}',
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _profileButton() {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        _showSnack('PROFILE SEGERA HADIR');
+      },
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(
+            color: Palette.violet.withValues(alpha: 0.55),
+            width: 1.2,
+          ),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: _user.isOwner
+                ? [Palette.pink, Palette.violet]
+                : _user.isVip
+                    ? [Palette.amber, Palette.coral]
+                    : [Palette.violet, Palette.cyanDeep],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Palette.violet.withValues(alpha: 0.35),
+              blurRadius: 12,
+            ),
+          ],
+        ),
+        child: Center(
+          child: Text(
+            _user.initial,
+            style: const TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _greetingHeader() {
+    final now = DateTime.now();
+    final hour = now.hour;
+    final greeting = hour < 12
+        ? 'SELAMAT PAGI'
+        : hour < 15
+            ? 'SELAMAT SIANG'
+            : hour < 18
+                ? 'SELAMAT SORE'
+                : 'SELAMAT MALAM';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(
           child: Column(
@@ -10163,392 +7689,1012 @@ class _DashboardScreenState extends State<DashboardScreen>
             children: [
               Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 5),
+                  horizontal: 9,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      color.withOpacity(0.22),
-                      color.withOpacity(0.05),
-                    ],
+                  color: Palette.violet.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(Radii.xs),
+                  border: Border.all(
+                    color: Palette.violet.withValues(alpha: 0.35),
                   ),
-                  borderRadius: BorderRadius.circular(R.pill),
-                  border: Border.all(color: color.withOpacity(0.5)),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(icon, size: 11, color: color),
-                    const SizedBox(width: 5),
+                    const Icon(
+                      Icons.wb_twilight_rounded,
+                      size: 10,
+                      color: Palette.violet,
+                    ),
+                    const SizedBox(width: 4),
                     Text(
-                      greet,
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 9,
+                      greeting,
+                      style: const TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 8.5,
                         fontWeight: FontWeight.w900,
-                        color: color,
+                        color: Palette.violet,
                         letterSpacing: 1.4,
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: S.sm),
-              ValueListenableBuilder<UserProfile?>(
-                valueListenable: ProfileStore.notifier,
-                builder: (_, profile, __) => Text(
-                  (profile?.username ?? 'GUEST USER').toUpperCase(),
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 30,
-                    fontWeight: FontWeight.w900,
-                    color: P.bone,
-                    letterSpacing: 0.5,
-                    height: 1.0,
-                    shadows: [
-                      Shadow(color: P.crimson, blurRadius: 16),
-                    ],
-                  ),
+              const SizedBox(height: Spc.sm),
+              Text(
+                'HAI, ${_user.username.toUpperCase()}',
+                style: const TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text,
+                  letterSpacing: -0.2,
+                  height: 1.1,
                 ),
               ),
-              const SizedBox(height: 6),
-              const Text(
-                'Support Apk Ini Terus Ya Jink',
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: P.text3,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
-          ),
-        ),
-        Glass(
-          padding:
-              const EdgeInsets.symmetric(horizontal: S.md, vertical: S.sm),
-          radius: R.md,
-          glow: true,
-          glowColor: accent,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
+              const SizedBox(height: 4),
               Row(
                 children: [
-                  Halo(color: accent, size: 5),
-                  const SizedBox(width: 6),
+                  const Icon(
+                    Icons.access_time_rounded,
+                    size: 10,
+                    color: Palette.text3,
+                  ),
+                  const SizedBox(width: 4),
                   Text(
-                    'ALIVE',
-                    style: TextStyle(
-                      fontFamily: Cfg.bugFont,
-                      fontSize: 8.5,
+                    'UPDATE ${_fmtTime(_lastUpdate)}',
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
                       fontWeight: FontWeight.w900,
-                      color: accent,
-                      letterSpacing: 1.4,
+                      color: Palette.text3,
+                      letterSpacing: 1.2,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              const Clock(
-                style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                  color: P.bone,
-                  letterSpacing: 1.4,
-                ),
-              ),
             ],
+          ),
+        ),
+        TapScale(
+          onTap: _loadWeather,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: _weather.isDay
+                    ? [Palette.amber, Palette.orange]
+                    : [Palette.violet, Palette.blue],
+              ),
+              borderRadius: BorderRadius.circular(Radii.sm),
+              boxShadow: [
+                BoxShadow(
+                  color: (_weather.isDay ? Palette.amber : Palette.violet)
+                      .withValues(alpha: 0.4),
+                  blurRadius: 14,
+                ),
+              ],
+            ),
+            child: Icon(_weather.icon, color: Colors.white, size: 22),
           ),
         ),
       ],
     );
   }
 
-  Widget _userPanel() {
-    return ValueListenableBuilder<UserProfile?>(
-      valueListenable: ProfileStore.notifier,
-      builder: (_, profile, __) {
-        final p = profile ??
-            UserProfile(
-              id: 'NEKO-LOADING',
-              username: 'GUEST USER',
-              avatarPath: '',
-              expired: '--',
-              role: 'basic',
-              email: '',
-              createdAt: DateTime.now(),
-            );
-        final hasAvatar = p.avatarPath.isNotEmpty;
-        return Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(R.xxl),
-            border:
-                Border.all(color: P.crimson.withOpacity(0.35), width: 1.4),
+  Widget _searchBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Palette.surface.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: Palette.border, width: 1),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: Spc.md),
+          const Icon(Icons.search_rounded, color: Palette.text3, size: 20),
+          const SizedBox(width: Spc.sm),
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              style: const TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: Palette.text,
+              ),
+              decoration: const InputDecoration(
+                hintText: 'CARI USER, ROLE, ATAU FITUR...',
+                hintStyle: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text3,
+                  letterSpacing: 1.4,
+                ),
+                border: InputBorder.none,
+                isCollapsed: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
           ),
-          child: SizedBox(
-            height: 320,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(R.xxl),
-              child: Stack(
+          if (_searchQuery.isNotEmpty)
+            GestureDetector(
+              onTap: () => _searchController.clear(),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: Spc.md),
+                child: Icon(
+                  Icons.close_rounded,
+                  color: Palette.text3,
+                  size: 18,
+                ),
+              ),
+            ),
+          Container(
+            margin: const EdgeInsets.all(4),
+            padding: const EdgeInsets.symmetric(
+              horizontal: Spc.md,
+              vertical: Spc.sm,
+            ),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Palette.violet, Palette.pink],
+              ),
+              borderRadius: BorderRadius.circular(Radii.sm),
+            ),
+            child: const Text(
+              'CARI',
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 9.5,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: 1.6,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _overlayMenuButton() {
+    return GestureDetector(
+      onTap: _showOverlayMenu,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Palette.surfaceAlt, Palette.surface],
+          ),
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(
+            color: Palette.cyan.withValues(alpha: 0.35),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Palette.cyan.withValues(alpha: 0.10),
+              blurRadius: 18,
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Palette.cyan.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(Radii.sm),
+                border: Border.all(
+                  color: Palette.cyan.withValues(alpha: 0.28),
+                ),
+              ),
+              child: const Icon(
+                Icons.layers_rounded,
+                color: Palette.cyan,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Positioned.fill(
-                    child: Image.asset(
-                      Cfg.neko,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [P.bloodDeep, P.violetDeep],
-                          ),
-                        ),
-                      ),
+                  Text(
+                    'OVERLAY MENU',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text,
+                      letterSpacing: 1.0,
                     ),
                   ),
-                  Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            P.bgDeep.withOpacity(0.78),
-                            P.bgDeep.withOpacity(0.85),
-                            P.bgDeep.withOpacity(0.95),
-                          ],
-                        ),
-                      ),
+                  SizedBox(height: 2),
+                  Text(
+                    'BUBBLE / PANEL / FITUR',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 7.5,
+                      fontWeight: FontWeight.w800,
+                      color: Palette.text3,
+                      letterSpacing: 1.1,
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(S.xl),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: Palette.text3,
+              size: 19,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _monitorStrip() {
+    return GlassPanel(
+      padding: const EdgeInsets.all(Spc.sm),
+      child: Row(
+        children: [
+          Expanded(
+            child: _monitorCell(
+              'ONLINE',
+              _stats.online,
+              Icons.visibility_rounded,
+              Palette.mint,
+            ),
+          ),
+          _cellDivider(),
+          Expanded(
+            child: _monitorCell(
+              'SESSIONS',
+              _stats.sessions,
+              Icons.sensors_rounded,
+              Palette.violet,
+            ),
+          ),
+          _cellDivider(),
+          Expanded(
+            child: _monitorCell(
+              'ACCOUNTS',
+              _backendUsers.length,
+              Icons.people_alt_rounded,
+              Palette.pink,
+            ),
+          ),
+          _cellDivider(),
+          Expanded(
+            child: _monitorTextCell(
+              'UPTIME',
+              _stats.uptimeSeconds > 0
+                  ? _formatUptime(_stats.uptimeSeconds)
+                  : '-',
+              Icons.speed_rounded,
+              Palette.cyan,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cellDivider() =>
+      Container(width: 1, height: 38, color: Palette.borderSoft);
+
+  Widget _monitorCell(String label, int value, IconData icon, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: color, size: 11),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 8,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text3,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        NumberCounter(
+          value: value,
+          style: TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+            color: color,
+            letterSpacing: -0.4,
+            height: 1.0,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _monitorTextCell(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: color, size: 11),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 8,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text3,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 13,
+            fontWeight: FontWeight.w900,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatUptime(int seconds) {
+    if (seconds <= 0) return '0s';
+    final d = Duration(seconds: seconds);
+    if (d.inDays > 0) return '${d.inDays}d ${d.inHours % 24}h';
+    if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes % 60}m';
+    if (d.inMinutes > 0) return '${d.inMinutes}m ${d.inSeconds % 60}s';
+    return '${d.inSeconds}s';
+  }
+
+  Widget _overviewTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: 'JUMLAH ROLE USER',
+          accent: Palette.pink,
+          trailing: '${_backendUsers.length} BACKEND',
+          trailingColor: Palette.pink,
+        ),
+        const SizedBox(height: Spc.md),
+        GlassPanel(
+          padding: const EdgeInsets.all(Spc.lg),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 110,
+                height: 110,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    DonutChart(
+                      values: [
+                        _backendUsers
+                            .where((u) => u.role.toLowerCase() == 'owner')
+                            .length
+                            .toDouble(),
+                        _backendUsers
+                            .where((u) => u.isAdmin)
+                            .length
+                            .toDouble(),
+                        _backendUsers.where((u) => u.isVip).length.toDouble(),
+                        _backendUsers
+                            .where((u) =>
+                                !u.isOwner && !u.isAdmin && !u.isVip)
+                            .length
+                            .toDouble(),
+                      ],
+                      colors: const [
+                        Palette.pink,
+                        Palette.violet,
+                        Palette.amber,
+                        Palette.text3,
+                      ],
+                      size: 110,
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    P.crimson.withOpacity(0.32),
-                                    P.bloodDeep.withOpacity(0.1),
-                                  ],
-                                ),
-                                borderRadius:
-                                    BorderRadius.circular(R.pill),
-                                border: Border.all(
-                                    color: P.crimson.withOpacity(0.55)),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.remove_red_eye_rounded,
-                                      size: 11, color: P.crimson),
-                                  SizedBox(width: 5),
-                                  Text(
-                                    'PROFIL',
-                                    style: TextStyle(
-                                      fontFamily: Cfg.bugFont,
-                                      fontSize: 8.5,
-                                      fontWeight: FontWeight.w900,
-                                      color: P.crimson,
-                                      letterSpacing: 1.4,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Spacer(),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    P.sick.withOpacity(0.25),
-                                    P.sick.withOpacity(0.06),
-                                  ],
-                                ),
-                                borderRadius:
-                                    BorderRadius.circular(R.pill),
-                                border: Border.all(
-                                    color: P.sick.withOpacity(0.5)),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Halo(color: P.sick, size: 4),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'ACTIVE',
-                                    style: TextStyle(
-                                      fontFamily: Cfg.bugFont,
-                                      fontSize: 8.5,
-                                      fontWeight: FontWeight.w900,
-                                      color: P.sick,
-                                      letterSpacing: 1.4,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: S.xl),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Tap(
-                              onTap: _openSetting,
-                              child: Container(
-                                padding: const EdgeInsets.all(3),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: const LinearGradient(
-                                      colors: [P.crimson, P.bloodDeep]),
-                                ),
-                                child: Container(
-                                  width: 88,
-                                  height: 88,
-                                  decoration: const BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: P.bgDeep,
-                                  ),
-                                  child: ClipOval(
-                                    child: hasAvatar
-                                        ? Image.file(
-                                            File(p.avatarPath),
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (_, __, ___) =>
-                                                _initialAvatar(p.initial),
-                                          )
-                                        : _initialAvatar(p.initial),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: S.lg),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    p.username.toUpperCase(),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontFamily: Cfg.bugFont,
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w900,
-                                      color: P.bone,
-                                      height: 1.0,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      RoleChipSimple(
-                                          role: p.role, fontSize: 9.5),
-                                      const SizedBox(width: 6),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: p.expiryColor
-                                              .withOpacity(0.15),
-                                          borderRadius:
-                                              BorderRadius.circular(R.pill),
-                                          border: Border.all(
-                                              color: p.expiryColor
-                                                  .withOpacity(0.5)),
-                                        ),
-                                        child: Text(
-                                          p.expiryStatus,
-                                          style: TextStyle(
-                                            fontFamily: Cfg.bugFont,
-                                            fontSize: 8.5,
-                                            fontWeight: FontWeight.w900,
-                                            color: p.expiryColor,
-                                            letterSpacing: 1.1,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: S.md),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: P.bgDeep.withOpacity(0.85),
-                                      borderRadius:
-                                          BorderRadius.circular(R.sm),
-                                      border: Border.all(
-                                          color: P.blood.withOpacity(0.5)),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(
-                                            Icons.fingerprint_rounded,
-                                            size: 11,
-                                            color: P.crimson),
-                                        const SizedBox(width: 5),
-                                        Text(
-                                          p.id,
-                                          style: const TextStyle(
-                                            fontFamily: Cfg.bugFont,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w900,
-                                            color: P.crimson,
-                                            letterSpacing: 1.2,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const Spacer(),
-                        Container(
-                          padding: const EdgeInsets.all(S.md),
-                          decoration: BoxDecoration(
-                            color: P.bgDeep.withOpacity(0.85),
-                            borderRadius: BorderRadius.circular(R.md),
-                            border: Border.all(
-                                color: P.blood.withOpacity(0.4)),
+                        Text(
+                          '${_backendUsers.length}',
+                          style: const TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: Palette.text,
+                            letterSpacing: -0.4,
                           ),
-                          child: Row(
-                            children: [
-                              _panelStatText('EXPIRED', p.expired, P.amber),
-                              _panelDiv(),
-                              _panelStat(
-                                  'STORY',
-                                  _stories.length,
-                                  Icons.auto_awesome_rounded,
-                                  P.rust),
-                              _panelDiv(),
-                              _panelStat(
-                                  'ROLE',
-                                  p.role.toUpperCase() == 'BASIC' ? 1 : 2,
-                                  Icons.verified_user_rounded,
-                                  P.violet),
-                            ],
+                        ),
+                        const Text(
+                          'TOTAL',
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            color: Palette.text3,
+                            letterSpacing: 1.4,
                           ),
                         ),
                       ],
                     ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: Spc.lg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _legendRow(
+                      'OWNER',
+                      _backendUsers.where((u) => u.isOwner).length,
+                      Palette.pink,
+                    ),
+                    const SizedBox(height: Spc.sm),
+                    _legendRow(
+                      'ADMIN',
+                      _backendUsers.where((u) => u.isAdmin).length,
+                      Palette.violet,
+                    ),
+                    const SizedBox(height: Spc.sm),
+                    _legendRow(
+                      'VIP',
+                      _backendUsers.where((u) => u.isVip).length,
+                      Palette.amber,
+                    ),
+                    const SizedBox(height: Spc.sm),
+                    _legendRow(
+                      'BASIC',
+                      _backendUsers
+                          .where((u) =>
+                              !u.isOwner && !u.isAdmin && !u.isVip)
+                          .length,
+                      Palette.text3,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: Spc.lg),
+        SectionHeader(
+          title: 'TOP USERS',
+          accent: Palette.amber,
+          trailing: 'RANKING',
+          trailingColor: Palette.amber,
+        ),
+        const SizedBox(height: Spc.md),
+        ..._topUsers().map(_topUserRow),
+      ],
+    );
+  }
+
+  List<AppUser> _topUsers() {
+    final list = List<AppUser>.from(_backendUsers);
+    list.sort((a, b) {
+      final aScore = (a.isOwner ? 100 : 0) +
+          (a.isAdmin ? 50 : 0) +
+          (a.isVip ? 25 : 0) +
+          (a.isActive ? 10 : 0);
+      final bScore = (b.isOwner ? 100 : 0) +
+          (b.isAdmin ? 50 : 0) +
+          (b.isVip ? 25 : 0) +
+          (b.isActive ? 10 : 0);
+      return bScore.compareTo(aScore);
+    });
+    return list.take(3).toList();
+  }
+
+  Widget _topUserRow(AppUser u) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spc.sm),
+      child: GlassPanel(
+        padding: const EdgeInsets.all(Spc.md),
+        child: Row(
+          children: [
+            AvatarCircle(user: u, size: 40, showRing: false),
+            const SizedBox(width: Spc.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    u.username.toUpperCase(),
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  RoleChip(role: u.role),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Icon(
+                  Icons.local_fire_department_rounded,
+                  color: Palette.coral,
+                  size: 16,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  u.isActive ? 'AKTIF' : 'OFF',
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    color: u.isActive ? Palette.mint : Palette.text3,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _legendRow(String label, int count, Color color) {
+    return Row(
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.5),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Spc.sm),
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w900,
+              color: Palette.text2,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+        Text(
+          count.toString(),
+          style: TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+            color: color,
+            letterSpacing: 0.4,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showCreateAccount() async {
+    if (!_backendAvailable) {
+      _showSnack('BACKEND OFFLINE — TIDAK BISA SIMPAN AKUN');
+      return;
+    }
+    final username = TextEditingController();
+    final password = TextEditingController();
+    final expiry = TextEditingController();
+    String role = 'basic';
+    bool obscure = true;
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: Palette.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Radii.lg),
+            side: const BorderSide(color: Palette.border),
+          ),
+          title: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Palette.cyan, Palette.violet],
+                  ),
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                ),
+                child: const Icon(
+                  Icons.person_add_rounded,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: Spc.md),
+              const Text(
+                'CREATE AKUN',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text,
+                  letterSpacing: 1.2,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _dialogField(
+                  controller: username,
+                  label: 'USERNAME',
+                  icon: Icons.person_rounded,
+                ),
+                const SizedBox(height: Spc.md),
+                _dialogField(
+                  controller: password,
+                  label: 'PASSWORD',
+                  icon: Icons.lock_rounded,
+                  obscure: obscure,
+                  suffix: IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: Icon(
+                      obscure
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                      color: Palette.text3,
+                      size: 18,
+                    ),
+                    onPressed: () =>
+                        setDialogState(() => obscure = !obscure),
+                  ),
+                ),
+                const SizedBox(height: Spc.md),
+                _dialogField(
+                  controller: expiry,
+                  label: 'EXPIRED (YYYY-MM-DD)',
+                  icon: Icons.event_available_rounded,
+                ),
+                const SizedBox(height: Spc.md),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: Spc.md),
+                  decoration: BoxDecoration(
+                    color: Palette.surfaceAlt,
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                    border: Border.all(color: Palette.border),
+                  ),
+                  child: DropdownButtonFormField<String>(
+                    value: role,
+                    dropdownColor: Palette.surfaceAlt,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      color: Palette.text,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                    ),
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      labelText: 'ROLE',
+                      labelStyle: TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.text3,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'basic', child: Text('BASIC')),
+                      DropdownMenuItem(value: 'vip', child: Text('VIP')),
+                      DropdownMenuItem(value: 'admin', child: Text('ADMIN')),
+                      DropdownMenuItem(value: 'owner', child: Text('OWNER')),
+                    ],
+                    onChanged: (v) =>
+                        setDialogState(() => role = v ?? 'basic'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text(
+                'BATAL',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text3,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = username.text.trim();
+                final pass = password.text.trim();
+                final exp = expiry.text.trim();
+                if (name.isEmpty || pass.isEmpty) return;
+                final parsed = DateTime.tryParse(exp) ??
+                    (() {
+                      final parts = exp.split('/');
+                      if (parts.length != 3) return null;
+                      return DateTime.tryParse(
+                        '${parts[2]}-${parts[1].padLeft(2, '0')}-${parts[0].padLeft(2, '0')}',
+                      );
+                    })();
+                if (parsed == null) return;
+                try {
+                  final ok = await _fb.writeAccount(
+                    username: name,
+                    password: pass,
+                    role: role,
+                    expired: exp,
+                    active: true,
+                  );
+                  if (context.mounted) Navigator.pop(context, ok);
+                } catch (_) {
+                  if (context.mounted) Navigator.pop(context, false);
+                }
+              },
+              child: const Text(
+                'SIMPAN',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    username.dispose();
+    password.dispose();
+    expiry.dispose();
+    if (!mounted) return;
+    if (created == true) {
+      _showSnack('AKUN TERSIMPAN KE SERVER');
+      await _load();
+    } else if (created == false) {
+      _showSnack('GAGAL MENYIMPAN AKUN');
+    }
+  }
+
+  Widget _dialogField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    bool obscure = false,
+    Widget? suffix,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Spc.md),
+      decoration: BoxDecoration(
+        color: Palette.surfaceAlt,
+        borderRadius: BorderRadius.circular(Radii.sm),
+        border: Border.all(color: Palette.border),
+      ),
+      child: TextField(
+        controller: controller,
+        obscureText: obscure,
+        style: const TextStyle(
+          fontFamily: AppConfig.fontBug,
+          color: Palette.text,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          icon: Icon(icon, color: Palette.text3, size: 16),
+          labelText: label,
+          labelStyle: const TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            color: Palette.text3,
+            letterSpacing: 1.2,
+          ),
+          suffixIcon: suffix,
+        ),
+      ),
+    );
+  }
+
+  Widget _syamgramTab() {
+    final offline = _backend != BackendState.online;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: 'SYAMGRAM',
+          accent: Palette.pink,
+          trailing:
+              _stories.isEmpty ? 'NO STORY' : '${_stories.length} STORY',
+          trailingColor: Palette.pink,
+        ),
+        const SizedBox(height: Spc.md),
+        if (offline)
+          GlassPanel(
+            padding: const EdgeInsets.all(Spc.md),
+            borderColor: Palette.coral.withValues(alpha: 0.35),
+            tint: Palette.coral.withValues(alpha: 0.06),
+            child: Row(
+              children: const [
+                Icon(
+                  Icons.cloud_off_rounded,
+                  color: Palette.coral,
+                  size: 18,
+                ),
+                SizedBox(width: Spc.md),
+                Expanded(
+                  child: Text(
+                    'SYAMGRAM BUTUH SERVER. Fitur tidak tersedia saat backend offline.',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
+                      color: Palette.text2,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (!offline) ...[
+          GlassPanel(
+            padding: const EdgeInsets.all(Spc.md),
+            child: SizedBox(
+              height: 118,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _stories.length + 1,
+                separatorBuilder: (_, __) => const SizedBox(width: Spc.md),
+                itemBuilder: (_, i) {
+                  if (i == 0) return _storyCircle(create: true);
+                  return _storyCircle(story: _stories[i - 1], index: i - 1);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: Spc.lg),
+          if (_stories.isEmpty)
+            GlassPanel(
+              padding: const EdgeInsets.all(Spc.xl),
+              child: Column(
+                children: const [
+                  Icon(
+                    Icons.photo_camera_back_rounded,
+                    size: 30,
+                    color: Palette.text3,
+                  ),
+                  SizedBox(height: Spc.md),
+                  Text(
+                    'BELUM ADA STORY',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text2,
+                      letterSpacing: 1.4,
+                    ),
                   ),
                 ],
+              ),
+            )
+          else
+            ..._stories.map(_storyFeedCard),
+        ],
+      ],
+    );
+  }
+
+  bool _isImageUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.gif') ||
+        lower.contains('format=jpg') ||
+        lower.contains('format=png');
+  }
+
+  bool _isVideoUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.endsWith('.mp4') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.m3u8');
+  }
+
+  bool _isLocalMedia(String url) {
+    if (url.isEmpty) return false;
+    if (url.startsWith('http://') || url.startsWith('https://')) return false;
+    if (url.startsWith('content://')) return true;
+    if (url.startsWith('/')) return true;
+    if (url.length > 2 && url[1] == ':' && (url[2] == '\\' || url[2] == '/')) {
+      return true;
+    }
+    return false;
+  }
+
+  Widget _storyMedia(String url, {BoxFit fit = BoxFit.cover}) {
+    if (_isLocalMedia(url)) {
+      return Image.file(
+        File(url),
+        fit: fit,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      );
+    }
+    return Image.network(
+      url,
+      fit: fit,
+      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      loadingBuilder: (_, child, progress) {
+        if (progress == null) return child;
+        return Container(
+          color: Palette.surfaceAlt,
+          child: const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation(Palette.violet),
               ),
             ),
           ),
@@ -10557,240 +8703,922 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _initialAvatar(String initial) {
-    return Container(
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [P.crimson, P.violetDeep],
+  Widget _storyCircle({
+    SyamStory? story,
+    bool create = false,
+    int index = 0,
+  }) {
+    final color = create ? Palette.pink : Palette.violet;
+    return GestureDetector(
+      onTap: () {
+        if (create) {
+          _showCreateStory();
+        } else {
+          _openStoryViewer(index);
+        }
+      },
+      child: SizedBox(
+        width: 82,
+        child: Column(
+          children: [
+            Container(
+              width: 68,
+              height: 68,
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [color, color.withValues(alpha: 0.25)],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.24),
+                    blurRadius: 16,
+                  ),
+                ],
+              ),
+              child: Container(
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Palette.surface,
+                ),
+                child: ClipOval(
+                  child: _storyThumb(story, create),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              create ? 'BUAT' : story!.username,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 8,
+                fontWeight: FontWeight.w900,
+                color: create ? Palette.pink : Palette.text2,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
         ),
       ),
-      child: Center(
+    );
+  }
+
+  Widget _storyThumb(SyamStory? story, bool create) {
+    if (create) {
+      return const Icon(Icons.add_rounded, color: Palette.text, size: 25);
+    }
+    final url = story!.mediaUrl?.trim() ?? '';
+    if (url.isEmpty) {
+      return Center(
         child: Text(
-          initial,
+          story.username.isEmpty ? '?' : story.username[0].toUpperCase(),
           style: const TextStyle(
-            fontFamily: Cfg.bugFont,
-            fontSize: 42,
+            fontFamily: AppConfig.fontBug,
+            fontSize: 22,
             fontWeight: FontWeight.w900,
-            color: P.bone,
+            color: Palette.text,
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _panelStat(String label, int value, IconData icon, Color color) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 11, color: color),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  label,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 8,
-                    fontWeight: FontWeight.w900,
-                    color: P.text4,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          NumCounter(
-            value: value,
-            style: TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
-              color: color,
-              height: 1.0,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _panelStatText(String label, String value, Color color) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.calendar_today_rounded, size: 11, color: color),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  label,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 8,
-                    fontWeight: FontWeight.w900,
-                    color: P.text4,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          Text(
-            value.isEmpty ? '--' : value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontFamily: Cfg.bugFont,
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              color: color,
-              height: 1.0,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _panelDiv() {
-    return Container(
-      width: 1,
-      height: 32,
-      margin: const EdgeInsets.symmetric(horizontal: S.sm),
-      color: P.blood.withOpacity(0.3),
-    );
-  }
-
-  // ─── STORY STRIP — no "+", avatar from user photo ───
-  Widget _storyStrip() {
-    final allStories = <StoryData>[
-      // Placeholder "posting story" card (own)
-      StoryData(
-        username: ProfileStore.current?.username ?? 'KAMU',
-        avatarText:
-            (ProfileStore.current?.initial ?? 'K').toUpperCase(),
-        avatarPath: ProfileStore.current?.avatarPath ?? '',
-        c1: P.violet,
-        c2: P.violetDeep,
-        isOwn: true,
-      ),
-      ..._stories,
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      );
+    }
+    if (_isImageUrl(url) || _isLocalMedia(url)) {
+      return _storyMedia(url);
+    }
+    return Stack(
+      fit: StackFit.expand,
       children: [
-        SizedBox(
-          height: 116,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            itemCount: allStories.length,
-            separatorBuilder: (_, __) => const SizedBox(width: S.md),
-            itemBuilder: (_, i) {
-              final story = allStories[i];
-              if (i == 0) {
-                // Slot "BUAT STORY" — no "+" badge, hanya label POSTING
-                return StoryCircle(
-                  data: story,
-                  isPosting: true,
-                  onTap: _showCreateStorySheet,
-                );
-              }
-              return StoryCircle(
-                data: story,
-                onTap: () => _onStoryTap(story),
-              );
-            },
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFF2E1065),
+                Color(0xFF7C3AED),
+                Color(0xFFEC4899),
+              ],
+            ),
           ),
         ),
-        if (_storyError != null) ...[
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              const Icon(Icons.cloud_off_rounded,
-                  size: 12, color: P.orange),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  'STORY ONLINE: $_storyError',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 8,
-                    color: P.text3,
-                    height: 1.3,
-                  ),
-                ),
-              ),
-              IconButton(
-                onPressed: _refreshStories,
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.refresh_rounded,
-                    size: 15, color: P.boneSoft),
-              ),
-            ],
+        const Center(
+          child: Icon(
+            Icons.play_circle_fill_rounded,
+            color: Colors.white,
+            size: 26,
           ),
-        ],
+        ),
       ],
     );
   }
 
-  Widget _orbitalHint() {
-    final selected = _selectedOrbitalLabel;
-    return Center(
-      child: AnimatedSwitcher(
-        duration: T.normal,
-        child: GestureDetector(
-          key: ValueKey(selected ?? 'no-orbit-selection'),
-          onTap: selected == null ? null : _openSelectedTool,
-          child: ValueListenableBuilder<Color>(
-            valueListenable: accentNotifier,
-            builder: (_, accent, __) => Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: S.lg, vertical: S.md),
-              decoration: BoxDecoration(
-                color: P.bgElevated.withOpacity(0.88),
-                borderRadius: BorderRadius.circular(R.pill),
-                border: Border.all(
-                  color: (selected == null ? P.blood : accent)
-                      .withOpacity(0.65),
+  void _openStoryViewer(int initialIndex) {
+    if (_stories.isEmpty) return;
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black,
+        transitionDuration: const Duration(milliseconds: 280),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
+        pageBuilder: (_, __, ___) => StoryViewer(
+          stories: _stories,
+          initialIndex: initialIndex,
+          currentUser: _user.username,
+          onReply: (story, text) async {
+            await _fb.sendChat(_user.username, '@${story.username}: $text');
+          },
+          onDelete: (story) => _confirmDeleteStory(story),
+        ),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
+  Widget _storyFeedCard(SyamStory story) {
+    final stamp =
+        '${story.time.hour.toString().padLeft(2, '0')}:${story.time.minute.toString().padLeft(2, '0')}';
+    final url = story.mediaUrl?.trim() ?? '';
+    final hasMedia = url.isNotEmpty;
+    final isImage = hasMedia && (_isImageUrl(url) || _isLocalMedia(url));
+    final isVideo = hasMedia && _isVideoUrl(url);
+    final isOwn =
+        story.username.toLowerCase() == _user.username.toLowerCase();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spc.md),
+      child: GlassPanel(
+        padding: const EdgeInsets.all(Spc.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Palette.pink.withValues(alpha: 0.12),
+                    border: Border.all(
+                      color: Palette.pink.withValues(alpha: 0.36),
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      story.username.isEmpty
+                          ? '?'
+                          : story.username[0].toUpperCase(),
+                      style: const TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.pink,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: Spc.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              story.username.toUpperCase(),
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w900,
+                                color: Palette.text,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                          ),
+                          if (isOwn) ...[
+                            const SizedBox(width: 5),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color:
+                                    Palette.violet.withValues(alpha: 0.18),
+                                borderRadius:
+                                    BorderRadius.circular(Radii.xs),
+                                border: Border.all(
+                                  color: Palette.violet
+                                      .withValues(alpha: 0.5),
+                                ),
+                              ),
+                              child: const Text(
+                                'KAMU',
+                                style: TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 7.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: Palette.violet,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        stamp,
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8,
+                          color: Palette.text3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isOwn)
+                  GestureDetector(
+                    onTap: () => _confirmDeleteStory(story),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: Palette.coral.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(Radii.xs),
+                        border: Border.all(
+                          color: Palette.coral.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.delete_outline_rounded,
+                        color: Palette.coral,
+                        size: 16,
+                      ),
+                    ),
+                  )
+                else
+                  HaloDot(color: Palette.mint, size: 4),
+              ],
+            ),
+            if (isImage) ...[
+              const SizedBox(height: Spc.md),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(Radii.sm),
+                child: _storyMedia(url),
+              ),
+            ],
+            if (isVideo) ...[
+              const SizedBox(height: Spc.md),
+              Container(
+                height: 160,
+                decoration: BoxDecoration(
+                  color: Palette.surfaceAlt,
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                  border: Border.all(color: Palette.borderSoft),
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.play_circle_outline_rounded,
+                    color: Palette.violet,
+                    size: 42,
+                  ),
                 ),
               ),
-              child: Row(
+            ],
+            if (story.text.isNotEmpty) ...[
+              const SizedBox(height: Spc.md),
+              Text(
+                story.text,
+                style: const TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: Palette.text2,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDeleteStory(SyamStory story) async {
+    final preview =
+        story.text.length > 60 ? '${story.text.substring(0, 60)}...' : story.text;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Palette.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.lg),
+          side: const BorderSide(color: Palette.border),
+        ),
+        title: const Text(
+          'HAPUS STORY',
+          style: TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontWeight: FontWeight.w900,
+            color: Palette.text,
+            letterSpacing: 1.2,
+            fontSize: 13,
+          ),
+        ),
+        content: Text(
+          'Yakin mau hapus story ini?\n\n$preview',
+          style: const TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 10,
+            color: Palette.text2,
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'BATAL',
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontWeight: FontWeight.w900,
+                color: Palette.text3,
+                letterSpacing: 1.4,
+              ),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Palette.coral),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'HAPUS',
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final success = await _fb.deleteStory(story.id);
+    if (!mounted) return;
+    if (success) {
+      setState(() => _stories.removeWhere((s) => s.id == story.id));
+      _showSnack('STORY DIHAPUS');
+      await _refreshRealtime();
+    } else {
+      _showSnack('GAGAL MENGHAPUS STORY');
+    }
+  }
+
+  Future<void> _showCreateStory() async {
+    if (!_backendAvailable) {
+      _showSnack('BACKEND OFFLINE — STORY BUTUH BACKEND');
+      return;
+    }
+    final textController = TextEditingController();
+    final mediaController = TextEditingController();
+    final picker = ImagePicker();
+    String mediaMode = 'url';
+    XFile? pickedFile;
+    bool uploading = false;
+
+    final result = await showDialog<Map<String, String>?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: Palette.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Radii.lg),
+            side: const BorderSide(color: Palette.border),
+          ),
+          title: const Text(
+            'BUAT SYAMGRAM STORY',
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontWeight: FontWeight.w900,
+              color: Palette.text,
+              letterSpacing: 1.2,
+              fontSize: 13,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: textController,
+                  maxLines: 4,
+                  style: const TextStyle(color: Palette.text),
+                  decoration: const InputDecoration(
+                    labelText: 'Isi story',
+                    hintText: 'Tulis apa yang sedang kamu bagikan...',
+                  ),
+                ),
+                const SizedBox(height: Spc.md),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setDialogState(() => mediaMode = 'url'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: Spc.sm,
+                          ),
+                          decoration: BoxDecoration(
+                            color: mediaMode == 'url'
+                                ? Palette.violet.withValues(alpha: 0.18)
+                                : Palette.surfaceAlt,
+                            borderRadius: BorderRadius.circular(Radii.sm),
+                            border: Border.all(
+                              color: mediaMode == 'url'
+                                  ? Palette.violet.withValues(alpha: 0.55)
+                                  : Palette.border,
+                            ),
+                          ),
+                          child: const Center(
+                            child: Text(
+                              'LINK URL',
+                              style: TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: Palette.text,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: Spc.sm),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () =>
+                            setDialogState(() => mediaMode = 'gallery'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: Spc.sm,
+                          ),
+                          decoration: BoxDecoration(
+                            color: mediaMode == 'gallery'
+                                ? Palette.pink.withValues(alpha: 0.18)
+                                : Palette.surfaceAlt,
+                            borderRadius: BorderRadius.circular(Radii.sm),
+                            border: Border.all(
+                              color: mediaMode == 'gallery'
+                                  ? Palette.pink.withValues(alpha: 0.55)
+                                  : Palette.border,
+                            ),
+                          ),
+                          child: const Center(
+                            child: Text(
+                              'GALERI',
+                              style: TextStyle(
+                                fontFamily: AppConfig.fontBug,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: Palette.text,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: Spc.md),
+                if (mediaMode == 'url')
+                  TextField(
+                    controller: mediaController,
+                    style: const TextStyle(color: Palette.text),
+                    decoration: const InputDecoration(
+                      labelText: 'Media URL (opsional)',
+                      hintText: 'https://... .jpg / .mp4',
+                    ),
+                  )
+                else
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      GestureDetector(
+                        onTap: uploading
+                            ? null
+                            : () async {
+                                final file = await picker.pickImage(
+                                  source: ImageSource.gallery,
+                                  imageQuality: 85,
+                                );
+                                if (file != null) {
+                                  setDialogState(() => pickedFile = file);
+                                }
+                              },
+                        child: Container(
+                          padding: const EdgeInsets.all(Spc.md),
+                          decoration: BoxDecoration(
+                            color: Palette.surfaceAlt,
+                            borderRadius: BorderRadius.circular(Radii.sm),
+                            border: Border.all(
+                              color: pickedFile != null
+                                  ? Palette.mint.withValues(alpha: 0.55)
+                                  : Palette.border,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                pickedFile != null
+                                    ? Icons.image_rounded
+                                    : Icons.image_outlined,
+                                color: pickedFile != null
+                                    ? Palette.mint
+                                    : Palette.text3,
+                                size: 18,
+                              ),
+                              const SizedBox(width: Spc.sm),
+                              Expanded(
+                                child: Text(
+                                  pickedFile == null
+                                      ? 'PILIH DARI GALERI'
+                                      : pickedFile!.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: AppConfig.fontBug,
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w900,
+                                    color: pickedFile != null
+                                        ? Palette.mint
+                                        : Palette.text3,
+                                    letterSpacing: 1.0,
+                                  ),
+                                ),
+                              ),
+                              if (pickedFile != null)
+                                GestureDetector(
+                                  onTap: () => setDialogState(
+                                      () => pickedFile = null),
+                                  child: const Icon(
+                                    Icons.close_rounded,
+                                    color: Palette.text3,
+                                    size: 16,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (pickedFile != null) ...[
+                        const SizedBox(height: Spc.md),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(Radii.sm),
+                          child: Image.file(
+                            File(pickedFile!.path),
+                            height: 140,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                const SizedBox(height: 0),
+                          ),
+                        ),
+                      ],
+                      if (uploading) ...[
+                        const SizedBox(height: Spc.md),
+                        const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor:
+                                  AlwaysStoppedAnimation(Palette.violet),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: uploading ? null : () => Navigator.pop(context),
+              child: const Text(
+                'BATAL',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text3,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            ),
+            FilledButton(
+              onPressed: uploading
+                  ? null
+                  : () async {
+                      final text = textController.text.trim();
+                      if (text.isEmpty) return;
+                      String? mediaUrl;
+                      if (mediaMode == 'url') {
+                        final u = mediaController.text.trim();
+                        mediaUrl = u.isEmpty ? null : u;
+                      } else if (pickedFile != null) {
+                        setDialogState(() => uploading = true);
+                        final uploaded = await _fb.uploadStoryMedia(
+                          File(pickedFile!.path),
+                        );
+                        if (!context.mounted) return;
+                        setDialogState(() => uploading = false);
+                        if (uploaded != null) {
+                          mediaUrl = uploaded;
+                        } else {
+                          mediaUrl = pickedFile!.path;
+                        }
+                      }
+                      if (!context.mounted) return;
+                      Navigator.pop(context, {
+                        'text': text,
+                        'media': mediaUrl ?? '',
+                      });
+                    },
+              child: uploading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    )
+                  : const Text(
+                      'POSTING',
+                      style: TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.4,
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+    textController.dispose();
+    mediaController.dispose();
+    if (!mounted || result == null) return;
+    final ok = await _fb.createStory(
+      username: _user.username,
+      text: result['text'] ?? '',
+      mediaUrl: (result['media'] ?? '').isEmpty ? null : result['media'],
+    );
+    if (!mounted) return;
+    _showSnack(ok ? 'STORY TERSIMPAN KE SERVER' : 'GAGAL MEMBUAT STORY');
+    if (ok) await _refreshRealtime();
+  }
+
+  Widget _transmissionTab() {
+    final offline = _backend != BackendState.online;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: 'TRANSMISSION',
+          accent: Palette.mint,
+          trailing: offline ? 'OFFLINE' : '${_chats.length} MSG',
+          trailingColor: offline ? Palette.coral : Palette.mint,
+          icon: Icons.notifications_rounded,
+        ),
+        const SizedBox(height: Spc.md),
+        if (offline)
+          GlassPanel(
+            padding: const EdgeInsets.all(Spc.md),
+            borderColor: Palette.coral.withValues(alpha: 0.35),
+            tint: Palette.coral.withValues(alpha: 0.06),
+            child: Row(
+              children: const [
+                Icon(
+                  Icons.cloud_off_rounded,
+                  color: Palette.coral,
+                  size: 18,
+                ),
+                SizedBox(width: Spc.md),
+                Expanded(
+                  child: Text(
+                    'TRANSMISSION BUTUH SERVER. Notifikasi akan tampil saat backend online.',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
+                      color: Palette.text2,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else if (_chats.isEmpty)
+          _emptyTransmission()
+        else
+          ..._chats.take(20).map(
+                (c) => Padding(
+                  padding: const EdgeInsets.only(bottom: Spc.sm),
+                  child: _transmissionCard(c),
+                ),
+              ),
+      ],
+    );
+  }
+
+  Widget _emptyTransmission() {
+    return GlassPanel(
+      padding: const EdgeInsets.all(Spc.xl),
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Palette.surfaceAlt,
+              border: Border.all(color: Palette.border),
+            ),
+            child: const Icon(
+              Icons.notifications_none_rounded,
+              size: 26,
+              color: Palette.text3,
+            ),
+          ),
+          const SizedBox(height: Spc.md),
+          const Text(
+            'BELUM ADA NOTIFIKASI',
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w900,
+              color: Palette.text2,
+              letterSpacing: 1.6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _transmissionCard(ChatMsg c) {
+    return Container(
+      padding: const EdgeInsets.all(Spc.md),
+      decoration: BoxDecoration(
+        color: Palette.surface.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: Palette.border, width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Stack(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Palette.violet, Palette.pink],
+                  ),
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                ),
+                child: Center(
+                  child: Text(
+                    c.sender.isNotEmpty ? c.sender[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: -2,
+                top: -2,
+                child: HaloDot(color: Palette.mint, size: 4),
+              ),
+            ],
+          ),
+          const SizedBox(width: Spc.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c.sender.toUpperCase(),
+                  style: const TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    color: Palette.text,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  c.message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 10,
+                    color: Palette.text2,
+                    letterSpacing: 0.3,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Spc.sm),
+          Text(
+            _fmtTime(c.time),
+            style: const TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 9,
+              color: Palette.violet,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _usersTab() {
+    final filtered = _filteredUsers;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: TapScale(
+            onTap: _showCreateAccount,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spc.md,
+                vertical: Spc.sm,
+              ),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Palette.cyan, Palette.violet],
+                ),
+                borderRadius: BorderRadius.circular(Radii.sm),
+                boxShadow: [
+                  BoxShadow(
+                    color: Palette.cyan.withValues(alpha: 0.3),
+                    blurRadius: 14,
+                  ),
+                ],
+              ),
+              child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    selected == null
-                        ? Icons.touch_app_rounded
-                        : Icons.open_in_new_rounded,
+                    Icons.person_add_rounded,
                     size: 14,
-                    color: accent,
+                    color: Colors.white,
                   ),
-                  const SizedBox(width: 7),
+                  SizedBox(width: 6),
                   Text(
-                    selected == null
-                        ? 'PILIH PLANET UNTUK MELANJUTKAN'
-                        : 'KLIK UNTUK MEMBUKA',
-                    style: const TextStyle(
-                      fontFamily: Cfg.bugFont,
+                    'CREATE AKUN',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
                       fontSize: 9,
                       fontWeight: FontWeight.w900,
-                      color: P.bone,
-                      letterSpacing: 1.25,
+                      color: Colors.white,
+                      letterSpacing: 1.2,
                     ),
                   ),
                 ],
@@ -10798,275 +9626,631 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
           ),
         ),
+        const SizedBox(height: Spc.md),
+        SectionHeader(
+          title: 'FILTER ROLE',
+          accent: Palette.cyan,
+          trailing: '${filtered.length} HASIL',
+          trailingColor: Palette.cyan,
+        ),
+        const SizedBox(height: Spc.md),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: Row(
+            children: [
+              FilterChipWidget(
+                label: 'semua',
+                selected: _roleFilter == 'all',
+                color: Palette.violet,
+                count: _backendUsers.length,
+                onTap: () => setState(() => _roleFilter = 'all'),
+              ),
+              const SizedBox(width: Spc.sm),
+              FilterChipWidget(
+                label: 'owner',
+                selected: _roleFilter == 'owner',
+                color: Palette.pink,
+                count: _backendUsers.where((u) => u.isOwner).length,
+                onTap: () => setState(() => _roleFilter = 'owner'),
+              ),
+              const SizedBox(width: Spc.sm),
+              FilterChipWidget(
+                label: 'admin',
+                selected: _roleFilter == 'admin',
+                color: Palette.violet,
+                count: _backendUsers.where((u) => u.isAdmin).length,
+                onTap: () => setState(() => _roleFilter = 'admin'),
+              ),
+              const SizedBox(width: Spc.sm),
+              FilterChipWidget(
+                label: 'vip',
+                selected: _roleFilter == 'vip',
+                color: Palette.amber,
+                count: _backendUsers.where((u) => u.isVip).length,
+                onTap: () => setState(() => _roleFilter = 'vip'),
+              ),
+              const SizedBox(width: Spc.sm),
+              FilterChipWidget(
+                label: 'basic',
+                selected: _roleFilter == 'basic',
+                color: Palette.text3,
+                count: _backendUsers
+                    .where((u) => !u.isOwner && !u.isAdmin && !u.isVip)
+                    .length,
+                onTap: () => setState(() => _roleFilter = 'basic'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: Spc.lg),
+        SectionHeader(
+          title: 'URUTKAN',
+          accent: Palette.amber,
+          trailingWidget: PopupMenuButton<UserSort>(
+            color: Palette.surfaceAlt,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Radii.sm),
+              side: const BorderSide(color: Palette.border),
+            ),
+            onSelected: (s) => setState(() => _sortMode = s),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: UserSort.name, child: Text('NAMA')),
+              PopupMenuItem(value: UserSort.role, child: Text('ROLE')),
+              PopupMenuItem(value: UserSort.status, child: Text('STATUS')),
+              PopupMenuItem(value: UserSort.expiry, child: Text('EXPIRED')),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spc.md,
+                vertical: 5,
+              ),
+              decoration: BoxDecoration(
+                color: Palette.surface.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(Radii.sm),
+                border: Border.all(color: Palette.border),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _sortMode.name.toUpperCase(),
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text2,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.arrow_drop_down_rounded,
+                    color: Palette.text2,
+                    size: 16,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: Spc.md),
+        if (filtered.isEmpty)
+          _emptyUsers()
+        else
+          ...filtered.map((u) => Padding(
+                padding: const EdgeInsets.only(bottom: Spc.sm),
+                child: _userCard(u),
+              )),
+      ],
+    );
+  }
+
+  Widget _emptyUsers() {
+    return GlassPanel(
+      padding: const EdgeInsets.all(Spc.xl),
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Palette.surfaceAlt,
+              border: Border.all(color: Palette.border),
+            ),
+            child: const Icon(
+              Icons.search_off_rounded,
+              size: 26,
+              color: Palette.text3,
+            ),
+          ),
+          const SizedBox(height: Spc.md),
+          const Text(
+            'TIDAK ADA HASIL',
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w900,
+              color: Palette.text2,
+              letterSpacing: 1.6,
+            ),
+          ),
+        ],
       ),
     );
   }
-}
 
-// ═════════════════════════════════════════════════════════════════
-// CREATE STORY SHEET — TEXT / IMAGE / VIDEO
-// ═════════════════════════════════════════════════════════════════
+  Widget _userCard(AppUser u) {
+    final active = u.isActive;
+    final color = active ? Palette.mint : Palette.coral;
+    return TapScale(
+      onTap: () => _showUserDetail(u),
+      child: GlassPanel(
+        padding: const EdgeInsets.all(Spc.md),
+        child: Row(
+          children: [
+            AvatarCircle(user: u, size: 44, showRing: false),
+            const SizedBox(width: Spc.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          u.username.toUpperCase(),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                            color: Palette.text,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      if (u.isOwner)
+                        const Icon(
+                          Icons.verified_rounded,
+                          color: Palette.gold,
+                          size: 12,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      RoleChip(role: u.role, fontSize: 8),
+                      const SizedBox(width: 5),
+                      Text(
+                        'EXP ${u.expired}',
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8.5,
+                          color: Palette.text4,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(Radii.pill),
+                    border: Border.all(
+                      color: color.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Text(
+                    active ? 'AKTIF' : 'MATI',
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.0,
+                      color: color,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Palette.text3,
+                  size: 16,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-class _CreateStorySheet extends StatefulWidget {
-  final Future<void> Function({
-    required String text,
-    String? mediaUrl,
-    StoryMediaType mediaType,
-  }) onSubmit;
+  Widget _logsTab() {
+    final offline = _backend != BackendState.online;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: 'EVENT TIMELINE',
+          accent: Palette.amber,
+          trailing: offline ? 'OFFLINE' : '${_logs.length} ENTRIES',
+          trailingColor: offline ? Palette.coral : Palette.amber,
+        ),
+        const SizedBox(height: Spc.md),
+        if (offline)
+          GlassPanel(
+            padding: const EdgeInsets.all(Spc.xl),
+            child: Column(
+              children: const [
+                Icon(
+                  Icons.receipt_long_rounded,
+                  size: 30,
+                  color: Palette.text3,
+                ),
+                SizedBox(height: Spc.md),
+                Text(
+                  'EVENT LOG BUTUH BACKEND',
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w900,
+                    color: Palette.text2,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else if (_logs.isEmpty)
+          GlassPanel(
+            padding: const EdgeInsets.all(Spc.xl),
+            child: const Text(
+              'BELUM ADA AKTIVITAS',
+              style: TextStyle(
+                fontFamily: AppConfig.fontBug,
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                color: Palette.text3,
+                letterSpacing: 1.4,
+              ),
+            ),
+          )
+        else
+          ...List<Widget>.generate(_logs.length, (i) {
+            final log = _logs[i];
+            final isFirst = i == 0;
+            final isLast = i == _logs.length - 1;
+            return _logRow(log, isFirst: isFirst, isLast: isLast);
+          }),
+      ],
+    );
+  }
 
-  const _CreateStorySheet({required this.onSubmit});
+  Widget _logRow(LogEntry log,
+      {required bool isFirst, required bool isLast}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 34,
+          child: Column(
+            children: [
+              if (!isFirst)
+                Container(width: 2, height: 12, color: Palette.border),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: log.color.withValues(alpha: 0.16),
+                  border: Border.all(
+                    color: log.color.withValues(alpha: 0.5),
+                    width: 1.4,
+                  ),
+                ),
+                child: Icon(log.icon, color: log.color, size: 14),
+              ),
+              if (!isLast)
+                Container(width: 2, height: 46, color: Palette.border),
+            ],
+          ),
+        ),
+        const SizedBox(width: Spc.md),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(
+              top: isFirst ? 0 : 6,
+              bottom: Spc.md,
+            ),
+            child: GlassPanel(
+              padding: const EdgeInsets.all(Spc.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: log.color.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(Radii.xs),
+                          border: Border.all(
+                            color: log.color.withValues(alpha: 0.42),
+                          ),
+                        ),
+                        child: Text(
+                          log.tag,
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            color: log.color,
+                            letterSpacing: 1.4,
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        log.stamp,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8,
+                          color: Palette.text4,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: Spc.sm),
+                  Text(
+                    log.title,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.text,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    log.detail,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9.5,
+                      color: Palette.text2,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
-  @override
-  State<_CreateStorySheet> createState() => _CreateStorySheetState();
-}
+  Widget _skeleton() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: const [
+        SkeletonShimmer(width: double.infinity, height: 215),
+        SizedBox(height: Spc.lg),
+        SkeletonShimmer(width: double.infinity, height: 340),
+        SizedBox(height: Spc.lg),
+        SkeletonShimmer(width: double.infinity, height: 60),
+        SizedBox(height: Spc.lg),
+        SkeletonShimmer(width: double.infinity, height: 300),
+      ],
+    );
+  }
 
-class _CreateStorySheetState extends State<_CreateStorySheet> {
-  final _textCtrl = TextEditingController();
-  StoryMediaType _type = StoryMediaType.text;
-  String? _pickedMediaPath;
-  bool _submitting = false;
+  void _showUserDetail(AppUser u) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _UserDetailSheet(user: u),
+    );
+  }
+
+  void _showNotifs() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _NotifSheet(items: _notifs),
+    );
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(msg),
+        ),
+      );
+  }
+
+  String _fmtTime(DateTime t) {
+    final now = DateTime.now();
+    final diff = now.difference(t);
+    if (diff.inMinutes < 1) return 'BARU';
+    if (diff.inHours < 1) return '${diff.inMinutes}M';
+    if (diff.inDays < 1) {
+      return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    }
+    return '${diff.inDays}H';
+  }
 
   @override
   void dispose() {
-    _textCtrl.dispose();
+    _poll?.cancel();
+    _weatherTimer?.cancel();
+    _prayerTimer?.cancel();
+    _searchController.dispose();
+    _entrance.dispose();
+    _tabController.dispose();
+    super.dispose();
+  }
+}
+
+class _ModuleData {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final Color color2;
+  final VoidCallback onTap;
+
+  const _ModuleData(
+    this.title,
+    this.subtitle,
+    this.icon,
+    this.color,
+    this.color2,
+    {required this.onTap}
+  );
+}
+
+class RoomChatScreen extends StatefulWidget {
+  const RoomChatScreen({super.key});
+
+  @override
+  State<RoomChatScreen> createState() => _RoomChatScreenState();
+}
+
+class _RoomChatScreenState extends State<RoomChatScreen>
+    with TickerProviderStateMixin {
+  final _fb = BackendSvc();
+  final _controller = TextEditingController();
+  final _scrollController = ScrollController();
+  final _focusNode = FocusNode();
+
+  List<ChatMsg> _messages = [];
+  bool _loading = true;
+  bool _sending = false;
+  Timer? _poll;
+  late AnimationController _entrance;
+  late Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _entrance = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
+    _entrance.forward();
+    _load();
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) {
+      _load(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _controller.dispose();
+    _scrollController.dispose();
+    _focusNode.dispose();
+    _entrance.dispose();
     super.dispose();
   }
 
-  Future<void> _pickMedia() async {
-    if (_type == StoryMediaType.text) return;
-    final picker = ImagePicker();
+  Future<void> _load({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _loading = true);
     try {
-      if (_type == StoryMediaType.image) {
-        final f = await picker.pickImage(
-          source: ImageSource.gallery,
-          imageQuality: 85,
-          maxWidth: 1440,
-        );
-        if (f == null) return;
-        setState(() => _pickedMediaPath = f.path);
-      } else {
-        final f = await picker.pickVideo(
-          source: ImageSource.gallery,
-          maxDuration: const Duration(seconds: 60),
-        );
-        if (f == null) return;
-        setState(() => _pickedMediaPath = f.path);
-      }
-    } catch (e) {
+      final all = await _fb.chats();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal memilih media: $e')),
-      );
+      setState(() {
+        _messages = all.reversed.toList();
+        _loading = false;
+      });
+      _scrollToEnd();
+    } catch (_) {
+      if (!mounted) return;
+      if (!silent) setState(() => _loading = false);
     }
   }
 
-  Future<void> _submit() async {
-    final text = _textCtrl.text.trim();
-    final mediaUrl = _pickedMediaPath;
-
-    if (text.isEmpty && mediaUrl == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tulis text atau pilih media.')),
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
       );
-      return;
-    }
+    });
+  }
 
-    setState(() => _submitting = true);
-    await widget.onSubmit(
-      text: text,
-      mediaUrl: mediaUrl,
-      mediaType: _type,
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    _controller.clear();
+
+    final optimistic = ChatMsg(
+      sender: 'KAMU',
+      message: text,
+      time: DateTime.now(),
     );
+    setState(() => _messages.add(optimistic));
+    _scrollToEnd();
+
+    final ok = await _fb.sendChat('guest', text);
     if (!mounted) return;
-    Navigator.of(context).pop();
+    setState(() => _sending = false);
+    if (ok) {
+      _load(silent: true);
+    } else {
+      setState(() => _messages.remove(optimistic));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('GAGAL KIRIM PESAN')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).viewInsets.bottom;
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottom),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(S.lg),
-          child: Glass(
-            radius: R.xxl,
-            tint: P.surface.withOpacity(0.98),
-            borderColor: P.violet.withOpacity(0.6),
-            padding: const EdgeInsets.all(S.lg),
+    return Scaffold(
+      backgroundColor: Palette.bg0,
+      body: CosmicBackground(
+        child: SafeArea(
+          child: FadeTransition(
+            opacity: _fade,
             child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.auto_awesome_rounded,
-                        color: P.violet, size: 20),
-                    const SizedBox(width: S.sm),
-                    const Text(
-                      'BUAT STORY',
-                      style: TextStyle(
-                        fontFamily: Cfg.bugFont,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        color: P.bone,
-                        letterSpacing: 1.8,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded,
-                          color: P.text3, size: 20),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: S.md),
-                // Tipe story: TEXT / IMAGE / VIDEO
-                Row(
-                  children: [
-                    _typeChip(
-                      label: 'TEXT',
-                      icon: Icons.text_fields_rounded,
-                      type: StoryMediaType.text,
-                      color: P.violet,
-                    ),
-                    const SizedBox(width: S.sm),
-                    _typeChip(
-                      label: 'GAMBAR',
-                      icon: Icons.image_rounded,
-                      type: StoryMediaType.image,
-                      color: P.cyan,
-                    ),
-                    const SizedBox(width: S.sm),
-                    _typeChip(
-                      label: 'VIDEO',
-                      icon: Icons.videocam_rounded,
-                      type: StoryMediaType.video,
-                      color: P.crimson,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: S.lg),
-                TextField(
-                  controller: _textCtrl,
-                  maxLines: 4,
-                  minLines: 3,
-                  maxLength: 200,
-                  style: const TextStyle(
-                    fontFamily: Cfg.bugFont,
-                    fontSize: 13,
-                    color: P.bone,
-                    height: 1.4,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'Tulis sesuatu...',
-                    hintStyle: const TextStyle(color: P.text4),
-                    filled: true,
-                    fillColor: P.bgDeep,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(R.md),
-                      borderSide: const BorderSide(color: P.border),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(R.md),
-                      borderSide: const BorderSide(color: P.border),
-                    ),
-                  ),
-                ),
-                if (_type != StoryMediaType.text) ...[
-                  const SizedBox(height: S.sm),
-                  Tap(
-                    onTap: _pickMedia,
-                    child: Container(
-                      padding: const EdgeInsets.all(S.md),
-                      decoration: BoxDecoration(
-                        color: P.bgDeep.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(R.md),
-                        border: Border.all(
-                          color: _pickedMediaPath != null
-                              ? P.sick.withOpacity(0.7)
-                              : P.border,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            _pickedMediaPath != null
-                                ? Icons.check_circle_rounded
-                                : (_type == StoryMediaType.image
-                                    ? Icons.image_rounded
-                                    : Icons.videocam_rounded),
-                            color: _pickedMediaPath != null
-                                ? P.sick
-                                : P.text3,
-                            size: 20,
-                          ),
-                          const SizedBox(width: S.md),
-                          Expanded(
-                            child: Text(
-                              _pickedMediaPath == null
-                                  ? (_type == StoryMediaType.image
-                                      ? 'PILIH GAMBAR'
-                                      : 'PILIH VIDEO')
-                                  : _pickedMediaPath!.split('/').last,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontFamily: Cfg.bugFont,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w900,
-                                color: P.bone,
-                                letterSpacing: 0.8,
-                              ),
-                            ),
-                          ),
-                          if (_pickedMediaPath != null)
-                            IconButton(
-                              onPressed: () =>
-                                  setState(() => _pickedMediaPath = null),
-                              icon: const Icon(Icons.clear_rounded,
-                                  size: 18, color: P.crimson),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: S.lg),
-                Tap(
-                  onTap: _submitting ? null : _submit,
-                  child: Container(
-                    height: 48,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(R.md),
-                      gradient: const LinearGradient(
-                        colors: [P.violet, P.violetDeep],
-                      ),
-                    ),
-                    child: Center(
-                      child: _submitting
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text(
-                              'PUBLIKASIKAN',
-                              style: TextStyle(
-                                fontFamily: Cfg.bugFont,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                                letterSpacing: 2,
-                              ),
-                            ),
-                    ),
-                  ),
-                ),
+                _buildHeader(),
+                Expanded(child: _buildMessages()),
+                _buildInput(),
               ],
             ),
           ),
@@ -11075,48 +10259,1648 @@ class _CreateStorySheetState extends State<_CreateStorySheet> {
     );
   }
 
-  Widget _typeChip({
-    required String label,
-    required IconData icon,
-    required StoryMediaType type,
-    required Color color,
-  }) {
-    final active = _type == type;
-    return Expanded(
-      child: Tap(
-        onTap: () => setState(() {
-          _type = type;
-          _pickedMediaPath = null;
-        }),
-        child: AnimatedContainer(
-          duration: T.normal,
-          padding: const EdgeInsets.symmetric(vertical: S.md),
-          decoration: BoxDecoration(
-            color: active ? color.withOpacity(0.2) : P.bgDeep,
-            borderRadius: BorderRadius.circular(R.md),
-            border: Border.all(
-              color: active ? color : P.border,
-              width: active ? 1.5 : 1.2,
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(Spc.lg, Spc.md, Spc.lg, Spc.md),
+      decoration: BoxDecoration(
+        color: Palette.surface.withValues(alpha: 0.72),
+        border: Border(
+          bottom: BorderSide(color: Palette.borderSoft),
+        ),
+      ),
+      child: Row(
+        children: [
+          TapScale(
+            onTap: () => Navigator.of(context).maybePop(),
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: Palette.surfaceAlt,
+                borderRadius: BorderRadius.circular(Radii.sm),
+                border: Border.all(color: Palette.border),
+              ),
+              child: const Icon(
+                Icons.arrow_back_rounded,
+                color: Palette.text,
+                size: 18,
+              ),
             ),
           ),
+          const SizedBox(width: Spc.md),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Palette.amber, Palette.orange],
+              ),
+              borderRadius: BorderRadius.circular(Radii.sm),
+              boxShadow: [
+                BoxShadow(
+                  color: Palette.amber.withValues(alpha: 0.5),
+                  blurRadius: 14,
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.forum_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+          const SizedBox(width: Spc.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'ROOM CHAT',
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: Palette.text,
+                    letterSpacing: 1.6,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    const HaloDot(color: Palette.mint, size: 3),
+                    const SizedBox(width: 5),
+                    Text(
+                      '${_messages.length} PESAN',
+                      style: const TextStyle(
+                        fontFamily: AppConfig.fontBug,
+                        fontSize: 8.5,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.text3,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          TapScale(
+            onTap: _load,
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Palette.violet, Palette.pink],
+                ),
+                borderRadius: BorderRadius.circular(Radii.sm),
+                boxShadow: [
+                  BoxShadow(
+                    color: Palette.violet.withValues(alpha: 0.4),
+                    blurRadius: 14,
+                  ),
+                ],
+              ),
+              child: _loading
+                  ? const Padding(
+                      padding: EdgeInsets.all(11),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    )
+                  : const Icon(
+                      Icons.refresh_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessages() {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation(Palette.violet),
+        ),
+      );
+    }
+    if (_messages.isEmpty) {
+      return Center(
+        child: GlassPanel(
+          padding: const EdgeInsets.all(Spc.xl),
           child: Column(
-            children: [
-              Icon(icon, color: active ? color : P.text3, size: 20),
-              const SizedBox(height: 4),
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(
+                Icons.forum_outlined,
+                size: 48,
+                color: Palette.text3,
+              ),
+              SizedBox(height: Spc.md),
               Text(
-                label,
+                'BELUM ADA PESAN',
                 style: TextStyle(
-                  fontFamily: Cfg.bugFont,
-                  fontSize: 9,
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 11,
                   fontWeight: FontWeight.w900,
-                  color: active ? color : P.text3,
-                  letterSpacing: 1.2,
+                  color: Palette.text3,
+                  letterSpacing: 1.4,
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'mulai percakapan dengan kirim pesan pertama',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 9,
+                  color: Palette.text4,
+                  letterSpacing: 0.4,
                 ),
               ),
             ],
           ),
         ),
+      );
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.all(Spc.lg),
+      itemCount: _messages.length,
+      itemBuilder: (_, i) {
+        final m = _messages[i];
+        final mine = m.sender.toUpperCase() == 'KAMU';
+        return _messageBubble(m, mine);
+      },
+    );
+  }
+
+  Widget _messageBubble(ChatMsg m, bool mine) {
+    final time =
+        '${m.time.hour.toString().padLeft(2, '0')}:${m.time.minute.toString().padLeft(2, '0')}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spc.md),
+      child: Row(
+        mainAxisAlignment:
+            mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (!mine) ...[
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Palette.violet, Palette.pink],
+                ),
+                borderRadius: BorderRadius.circular(Radii.xs),
+              ),
+              child: Center(
+                child: Text(
+                  m.sender.isEmpty ? '?' : m.sender[0].toUpperCase(),
+                  style: const TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: Spc.sm),
+          ],
+          Flexible(
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width * 0.72,
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spc.md,
+                vertical: Spc.sm,
+              ),
+              decoration: BoxDecoration(
+                gradient: mine
+                    ? const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Palette.violet, Palette.violetDeep],
+                      )
+                    : null,
+                color: mine ? null : Palette.surface.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(Radii.md),
+                  topRight: const Radius.circular(Radii.md),
+                  bottomLeft: Radius.circular(mine ? Radii.md : Radii.xs),
+                  bottomRight: Radius.circular(mine ? Radii.xs : Radii.md),
+                ),
+                border: mine ? null : Border.all(color: Palette.border),
+                boxShadow: [
+                  BoxShadow(
+                    color: (mine ? Palette.violet : Colors.black)
+                        .withValues(alpha: 0.3),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: mine
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
+                children: [
+                  if (!mine)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Text(
+                        m.sender.toUpperCase(),
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w900,
+                          color: Palette.violet,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                    ),
+                  Text(
+                    m.message,
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 11.5,
+                      color: Palette.text,
+                      height: 1.4,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    time,
+                    style: TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 8,
+                      color:
+                          Palette.text.withValues(alpha: mine ? 0.7 : 0.4),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (mine) const SizedBox(width: Spc.sm),
+        ],
       ),
+    );
+  }
+
+  Widget _buildInput() {
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        Spc.lg,
+        Spc.md,
+        Spc.lg,
+        bottomInset > 0 ? bottomInset : Spc.md,
+      ),
+      decoration: BoxDecoration(
+        color: Palette.surface.withValues(alpha: 0.85),
+        border: Border(
+          top: BorderSide(color: Palette.borderSoft),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: Spc.md),
+              decoration: BoxDecoration(
+                color: Palette.surfaceAlt,
+                borderRadius: BorderRadius.circular(Radii.pill),
+                border: Border.all(color: Palette.border),
+              ),
+              child: TextField(
+                controller: _controller,
+                focusNode: _focusNode,
+                maxLines: 4,
+                minLines: 1,
+                textInputAction: TextInputAction.newline,
+                style: const TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 12,
+                  color: Palette.text,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Tulis pesan...',
+                  hintStyle: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 11.5,
+                    color: Palette.text3,
+                  ),
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: Spc.sm),
+          GestureDetector(
+            onTap: _sending ? null : _send,
+            child: Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Palette.amber, Palette.orange],
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Palette.amber.withValues(alpha: 0.5),
+                    blurRadius: 14,
+                  ),
+                ],
+              ),
+              child: _sending
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    )
+                  : const Icon(
+                      Icons.send_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class StoryViewer extends StatefulWidget {
+  final List<SyamStory> stories;
+  final int initialIndex;
+  final String currentUser;
+  final Future<void> Function(SyamStory story, String text) onReply;
+  final Future<void> Function(SyamStory story)? onDelete;
+
+  const StoryViewer({
+    super.key,
+    required this.stories,
+    required this.initialIndex,
+    required this.currentUser,
+    required this.onReply,
+    this.onDelete,
+  });
+
+  @override
+  State<StoryViewer> createState() => _StoryViewerState();
+}
+
+class _StoryViewerState extends State<StoryViewer>
+    with TickerProviderStateMixin {
+  late PageController _pageController;
+  late AnimationController _progressController;
+  int _currentIndex = 0;
+  static const Duration _storyDuration = Duration(seconds: 5);
+  final _replyController = TextEditingController();
+  final _replyFocus = FocusNode();
+
+  bool get _isOwnStory {
+    if (widget.stories.isEmpty) return false;
+    return widget.stories[_currentIndex].username.toLowerCase() ==
+        widget.currentUser.toLowerCase();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: _currentIndex);
+    _progressController = AnimationController(
+      vsync: this,
+      duration: _storyDuration,
+    )..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          _nextStory();
+        }
+      });
+    _progressController.forward();
+  }
+
+  @override
+  void dispose() {
+    _progressController.dispose();
+    _pageController.dispose();
+    _replyController.dispose();
+    _replyFocus.dispose();
+    super.dispose();
+  }
+
+  void _nextStory() {
+    if (_currentIndex >= widget.stories.length - 1) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() => _currentIndex++);
+    _pageController.nextPage(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+    _progressController.forward(from: 0);
+  }
+
+  void _prevStory() {
+    if (_currentIndex <= 0) {
+      _progressController.forward(from: 0);
+      return;
+    }
+    setState(() => _currentIndex--);
+    _pageController.previousPage(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+    _progressController.forward(from: 0);
+  }
+
+  bool _isImageUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.gif') ||
+        lower.contains('format=jpg') ||
+        lower.contains('format=png');
+  }
+
+  bool _isVideoUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.endsWith('.mp4') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.m3u8');
+  }
+
+  bool _isLocalMedia(String url) {
+    if (url.isEmpty) return false;
+    if (url.startsWith('http://') || url.startsWith('https://')) return false;
+    if (url.startsWith('content://')) return true;
+    if (url.startsWith('/')) return true;
+    if (url.length > 2 && url[1] == ':' && (url[2] == '\\' || url[2] == '/')) {
+      return true;
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragUpdate: (details) {
+          if (details.delta.dy > 8) Navigator.pop(context);
+        },
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _pageController,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: widget.stories.length,
+              onPageChanged: (i) => setState(() => _currentIndex = i),
+              itemBuilder: (_, i) => _buildStory(widget.stories[i]),
+            ),
+            Positioned.fill(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _prevStory,
+                      behavior: HitTestBehavior.opaque,
+                    ),
+                  ),
+                  const Spacer(),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _nextStory,
+                      behavior: HitTestBehavior.opaque,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SafeArea(
+              child: Column(
+                children: [
+                  _buildProgressBar(),
+                  _buildProfileRow(),
+                ],
+              ),
+            ),
+            if (!_isOwnStory)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: SafeArea(child: _buildReplyBar()),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStory(SyamStory story) {
+    final mediaUrl = story.mediaUrl?.trim() ?? '';
+    final hasMedia = mediaUrl.isNotEmpty;
+    final isImage =
+        hasMedia && (_isImageUrl(mediaUrl) || _isLocalMedia(mediaUrl));
+    final isVideo = hasMedia && _isVideoUrl(mediaUrl);
+    final isTextOnly = !hasMedia || (!isImage && !isVideo);
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (isImage)
+          _isLocalMedia(mediaUrl)
+              ? Image.file(
+                  File(mediaUrl),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => _gradientBg(),
+                )
+              : Image.network(
+                  mediaUrl,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => _gradientBg(),
+                  loadingBuilder: (_, child, progress) {
+                    if (progress == null) return child;
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _gradientBg(),
+                        Center(
+                          child: CircularProgressIndicator(
+                            value: progress.expectedTotalBytes != null
+                                ? progress.cumulativeBytesLoaded /
+                                    progress.expectedTotalBytes!
+                                : null,
+                            valueColor: const AlwaysStoppedAnimation(
+                              Palette.violet,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                )
+        else if (isVideo)
+          _StoryVideoPlayer(url: mediaUrl)
+        else
+          _gradientBg(),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.55),
+                    Colors.transparent,
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.75),
+                  ],
+                  stops: const [0.0, 0.25, 0.65, 1.0],
+                ),
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: Padding(
+            padding: const EdgeInsets.only(
+              top: 140,
+              bottom: 120,
+              left: 28,
+              right: 28,
+            ),
+            child: Center(
+              child: isTextOnly
+                  ? _buildTextStory(story)
+                  : _buildMediaCaption(story),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _gradientBg() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2E1065),
+            Color(0xFF7C3AED),
+            Color(0xFFEC4899),
+            Color(0xFFFB7185),
+          ],
+          stops: [0.0, 0.35, 0.7, 1.0],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextStory(SyamStory story) {
+    return Container(
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.32),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.25),
+          width: 1.4,
+        ),
+      ),
+      child: Text(
+        story.text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontFamily: AppConfig.fontBug,
+          fontSize: 22,
+          fontWeight: FontWeight.w900,
+          color: Colors.white,
+          height: 1.4,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMediaCaption(SyamStory story) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.18),
+          ),
+        ),
+        child: Text(
+          story.text,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontFamily: AppConfig.fontBug,
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: Colors.white,
+            height: 1.4,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      child: Row(
+        children: List.generate(widget.stories.length, (i) {
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: _progressSegment(i),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _progressSegment(int index) {
+    return AnimatedBuilder(
+      animation: _progressController,
+      builder: (_, __) {
+        double value;
+        if (index < _currentIndex) {
+          value = 1.0;
+        } else if (index > _currentIndex) {
+          value = 0.0;
+        } else {
+          value = _progressController.value;
+        }
+        return Container(
+          height: 3,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(2),
+          ),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: value,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildProfileRow() {
+    final story = widget.stories[_currentIndex];
+    final stamp =
+        '${story.time.hour.toString().padLeft(2, '0')}:${story.time.minute.toString().padLeft(2, '0')}';
+    final isOwn =
+        story.username.toLowerCase() == widget.currentUser.toLowerCase();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            padding: const EdgeInsets.all(2),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [Palette.pink, Palette.violet],
+              ),
+            ),
+            child: Container(
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.black,
+              ),
+              child: Center(
+                child: Text(
+                  story.username.isEmpty
+                      ? '?'
+                      : story.username[0].toUpperCase(),
+                  style: const TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        story.username,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ),
+                    if (isOwn) ...[
+                      const SizedBox(width: 5),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Palette.violet.withValues(alpha: 0.28),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: Palette.violet.withValues(alpha: 0.7),
+                          ),
+                        ),
+                        child: const Text(
+                          'KAMU',
+                          style: TextStyle(
+                            fontFamily: AppConfig.fontBug,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$stamp  •  ${_currentIndex + 1}/${widget.stories.length}',
+                  style: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 10,
+                    color: Colors.white.withValues(alpha: 0.75),
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isOwn && widget.onDelete != null)
+            GestureDetector(
+              onTap: () async {
+                await widget.onDelete!(story);
+                if (!mounted) return;
+                Navigator.pop(context);
+              },
+              child: Container(
+                width: 38,
+                height: 38,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: Palette.coral.withValues(alpha: 0.22),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Palette.coral.withValues(alpha: 0.55),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Palette.coral,
+                  size: 18,
+                ),
+              ),
+            ),
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.25),
+                ),
+              ),
+              child: const Icon(
+                Icons.close_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReplyBar() {
+    return Padding(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 4,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.35),
+                ),
+              ),
+              child: TextField(
+                controller: _replyController,
+                focusNode: _replyFocus,
+                style: const TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 12,
+                  color: Colors.white,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Balas story...',
+                  hintStyle: TextStyle(
+                    fontFamily: AppConfig.fontBug,
+                    fontSize: 12,
+                    color: Colors.white60,
+                  ),
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 14),
+                ),
+                onSubmitted: (_) => _sendReply(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: _sendReply,
+            child: Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Palette.pink, Palette.violet],
+                ),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.send_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendReply() async {
+    final text = _replyController.text.trim();
+    if (text.isEmpty) return;
+    final story = widget.stories[_currentIndex];
+    _replyController.clear();
+    _replyFocus.unfocus();
+    await widget.onReply(story, text);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 1),
+        content: Text('Balasan terkirim ke ${story.username}'),
+      ),
+    );
+  }
+}
+
+class _StoryVideoPlayer extends StatefulWidget {
+  final String url;
+  const _StoryVideoPlayer({required this.url});
+
+  @override
+  State<_StoryVideoPlayer> createState() => _StoryVideoPlayerState();
+}
+
+class _StoryVideoPlayerState extends State<_StoryVideoPlayer> {
+  VideoPlayerController? _controller;
+  bool _ready = false;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      final isLocal = !widget.url.startsWith('http');
+      final c = isLocal
+          ? VideoPlayerController.file(File(widget.url))
+          : VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      await c.initialize();
+      await c.setLooping(true);
+      await c.setVolume(0);
+      await c.play();
+      if (!mounted) {
+        c.dispose();
+        return;
+      }
+      setState(() {
+        _controller = c;
+        _ready = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _failed = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF2E1065),
+              Color(0xFF7C3AED),
+              Color(0xFFEC4899),
+            ],
+          ),
+        ),
+        child: const Center(
+          child: Icon(
+            Icons.broken_image_rounded,
+            color: Colors.white,
+            size: 48,
+          ),
+        ),
+      );
+    }
+    if (!_ready || _controller == null) {
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation(Palette.violet),
+          ),
+        ),
+      );
+    }
+    return Center(
+      child: AspectRatio(
+        aspectRatio: _controller!.value.aspectRatio,
+        child: VideoPlayer(_controller!),
+      ),
+    );
+  }
+}
+
+class _UserDetailSheet extends StatelessWidget {
+  final AppUser user;
+
+  const _UserDetailSheet({required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    final expiryColor = user.expiryColor;
+    return Container(
+      margin: const EdgeInsets.all(Spc.lg),
+      padding: const EdgeInsets.all(Spc.xl),
+      decoration: BoxDecoration(
+        color: Palette.surface,
+        borderRadius: BorderRadius.circular(Radii.xl),
+        border: Border.all(color: Palette.border, width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Palette.violet.withValues(alpha: 0.22),
+            blurRadius: 30,
+            spreadRadius: -6,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 44,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Palette.border,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(height: Spc.xl),
+          AvatarCircle(user: user, size: 76),
+          const SizedBox(height: Spc.lg),
+          Text(
+            user.username.toUpperCase(),
+            style: const TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: Palette.text,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 6),
+          RoleChip(role: user.role),
+          const SizedBox(height: Spc.xl),
+          _row('USER ID', '#${user.id}'),
+          _row('STATUS', user.isActive ? 'AKTIF' : 'NONAKTIF'),
+          _row('EXPIRED', user.expired, valueColor: expiryColor),
+          _row('DIBUAT', user.createdAt),
+          const SizedBox(height: Spc.lg),
+          Row(
+            children: [
+              Expanded(
+                child: TapScale(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: user.username));
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        duration: Duration(seconds: 2),
+                        content: Text('USERNAME DISALIN'),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: Spc.md),
+                    decoration: BoxDecoration(
+                      color: Palette.surfaceAlt,
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                      border: Border.all(color: Palette.border),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'SALIN',
+                        style: TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: Palette.text2,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: Spc.sm),
+              Expanded(
+                child: TapScale(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: Spc.md),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Palette.violet, Palette.pink],
+                      ),
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'TUTUP',
+                        style: TextStyle(
+                          fontFamily: AppConfig.fontBug,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(String k, String v, {Color? valueColor}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spc.md),
+      child: Row(
+        children: [
+          Text(
+            k,
+            style: const TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: Palette.text3,
+              letterSpacing: 1.4,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            v,
+            style: TextStyle(
+              fontFamily: AppConfig.fontBug,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: valueColor ?? Palette.text,
+              letterSpacing: 0.6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NotifSheet extends StatelessWidget {
+  final List<NotifItem> items;
+
+  const _NotifSheet({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(Spc.lg),
+      padding: const EdgeInsets.all(Spc.lg),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.72,
+      ),
+      decoration: BoxDecoration(
+        color: Palette.surface,
+        borderRadius: BorderRadius.circular(Radii.xl),
+        border: Border.all(color: Palette.border, width: 1.2),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 44,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Palette.border,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(height: Spc.lg),
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: Palette.violet.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                  border: Border.all(
+                    color: Palette.violet.withValues(alpha: 0.4),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.notifications_rounded,
+                  color: Palette.violet,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: Spc.md),
+              const Text(
+                'NOTIFIKASI',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text,
+                  letterSpacing: 2.4,
+                ),
+              ),
+              const Spacer(),
+              if (items.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Palette.coral.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(Radii.pill),
+                    border: Border.all(
+                      color: Palette.coral.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Text(
+                    '${items.length}',
+                    style: const TextStyle(
+                      fontFamily: AppConfig.fontBug,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: Palette.coral,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: Spc.md),
+          if (items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: Spc.xl),
+              child: Text(
+                'TIDAK ADA NOTIFIKASI',
+                style: TextStyle(
+                  fontFamily: AppConfig.fontBug,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.text3,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            )
+          else
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const BouncingScrollPhysics(),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: Spc.sm),
+                itemBuilder: (_, i) {
+                  final n = items[i];
+                  return Container(
+                    padding: const EdgeInsets.all(Spc.md),
+                    decoration: BoxDecoration(
+                      color: Palette.surfaceAlt,
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                      border: Border.all(color: Palette.border),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: n.color.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(Radii.xs),
+                            border: Border.all(
+                              color: n.color.withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: Icon(n.icon, color: n.color, size: 16),
+                        ),
+                        const SizedBox(width: Spc.md),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                n.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: Palette.text,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                n.body,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontFamily: AppConfig.fontBug,
+                                  fontSize: 9.5,
+                                  color: Palette.text2,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FLUTTER ERROR: ${details.exception}');
+    debugPrint('STACK: ${details.stack}');
+  };
+
+  WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+    debugPrint('UNCAUGHT: $error');
+    debugPrint('STACK: $stack');
+    return true;
+  };
+
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
+  );
+  SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+    DeviceOrientation.portraitUp,
+  ]);
+  runApp(const NekoApp());
+}
+
+class NekoApp extends StatefulWidget {
+  const NekoApp({super.key});
+
+  @override
+  State<NekoApp> createState() => _NekoAppState();
+}
+
+class _NekoAppState extends State<NekoApp> with WidgetsBindingObserver {
+  StreamSubscription<dynamic>? _overlaySub;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _bootstrapOverlay();
+      _listenOverlay();
+    });
+  }
+
+  @override
+  void dispose() {
+    _overlaySub?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _recheckOverlay();
+    }
+  }
+
+  Future<void> _bootstrapOverlay() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final enabled = prefs.getBool(AppConfig.prefOverlayEnabled) ?? true;
+      if (!enabled) {
+        debugPrint('BOOTSTRAP OVERLAY DISABLED BY USER');
+        return;
+      }
+      final granted = await FlutterOverlayWindow.isPermissionGranted();
+      debugPrint('BOOTSTRAP GRANTED: $granted');
+
+      if (granted == true) {
+        await _ensureOverlayRunning();
+        return;
+      }
+
+      await FlutterOverlayWindow.requestPermission();
+    } catch (e, st) {
+      debugPrint('OVERLAY BOOTSTRAP ERROR: $e');
+      debugPrint('$st');
+    }
+  }
+
+  void _listenOverlay() {
+    _overlaySub?.cancel();
+    _overlaySub = FlutterOverlayWindow.overlayListener.listen(
+      (dynamic data) async {
+        if (!mounted) return;
+        Map<String, dynamic>? payload;
+        if (data is Map) {
+          payload = data.map((k, v) => MapEntry('$k', v));
+        } else if (data is String) {
+          try {
+            final decoded = jsonDecode(data);
+            if (decoded is Map) {
+              payload = decoded.map((k, v) => MapEntry('$k', v));
+            }
+          } catch (_) {}
+        }
+        final type = '${payload?['type'] ?? ''}';
+        final command = '${payload?['command'] ?? data ?? ''}'.trim();
+        debugPrint('OVERLAY EVENT: type=$type command=$command');
+
+        switch (command) {
+          case 'chat_ai':
+            navigatorKey.currentState?.push(
+              MaterialPageRoute(builder: (_) => const ChatScreen()),
+            );
+            break;
+          case 'menu':
+            navigatorKey.currentState?.push(
+              MaterialPageRoute(builder: (_) => const MenuScreen()),
+            );
+            break;
+          case 'rat':
+            navigatorKey.currentState?.push(
+              MaterialPageRoute(builder: (_) => const RatScreen()),
+            );
+            break;
+          case 'dashboard':
+            navigatorKey.currentState?.popUntil((r) => r.isFirst);
+            break;
+        }
+      },
+    );
+  }
+
+  Future<void> _recheckOverlay() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final enabled = prefs.getBool(AppConfig.prefOverlayEnabled) ?? true;
+      if (!enabled) return;
+      final granted = await FlutterOverlayWindow.isPermissionGranted();
+      debugPrint('RECHECK GRANTED: $granted');
+      if (granted != true) return;
+      final active = await FlutterOverlayWindow.isActive();
+      debugPrint('RECHECK ACTIVE: $active');
+      if (active == true) return;
+      await _ensureOverlayRunning();
+    } catch (e) {
+      debugPrint('RECHECK ERROR: $e');
+    }
+  }
+
+  Future<void> _ensureOverlayRunning() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final enabled = prefs.getBool(AppConfig.prefOverlayEnabled) ?? true;
+      if (!enabled) return;
+      final granted = await FlutterOverlayWindow.isPermissionGranted();
+      if (granted != true) {
+        await FlutterOverlayWindow.requestPermission();
+        return;
+      }
+      final active = await FlutterOverlayWindow.isActive();
+      if (active == true) return;
+
+      await FlutterOverlayWindow.showOverlay(
+        height: 64,
+        width: 64,
+        alignment: OverlayAlignment.centerRight,
+        visibility: NotificationVisibility.visibilitySecret,
+        positionGravity: PositionGravity.none,
+        enableDrag: false,
+        flag: OverlayFlag.defaultFlag,
+        overlayTitle: 'Neko Assist',
+        overlayContent: 'Bubble aktif',
+      );
+
+      final panelEnabled = prefs.getBool(AppConfig.prefOverlayPanel) ?? true;
+      final dashboardEnabled =
+          prefs.getBool(AppConfig.prefOverlayDashboard) ?? true;
+      final bugEnabled = prefs.getBool(AppConfig.prefOverlayBug) ?? true;
+      final chatEnabled = prefs.getBool(AppConfig.prefOverlayChat) ?? true;
+      final scale =
+          (prefs.getDouble('overlay_scale') ?? 1.0).clamp(0.75, 1.35);
+      final username = prefs.getString('session_username') ?? 'guest';
+      final role = prefs.getString('session_role') ?? 'basic';
+      final expired = prefs.getString('session_expired') ?? '-';
+
+      try {
+        await FlutterOverlayWindow.shareData(jsonEncode({
+          'type': 'settings',
+          'overlay_enabled': true,
+          'username': username,
+          'role': role,
+          'expired': expired,
+          'panel_enabled': panelEnabled,
+          'dashboard_enabled': dashboardEnabled,
+          'bug_enabled': bugEnabled,
+          'chat_enabled': chatEnabled,
+          'scale': scale,
+        }));
+      } catch (_) {}
+
+      debugPrint('SHOW OVERLAY CALLED');
+    } catch (e, st) {
+      debugPrint('ENSURE OVERLAY ERROR: $e');
+      debugPrint('$st');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'NekoVerse',
+      debugShowCheckedModeBanner: false,
+      navigatorKey: navigatorKey,
+      theme: AppTheme.build(),
+      home: const SessionGate(),
+      builder: (context, child) => child ?? const SizedBox.shrink(),
     );
   }
 }
